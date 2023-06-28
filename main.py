@@ -168,7 +168,8 @@ if args.load_path=='':
 
     elif args.model=='VFMLP':
         model = VF_MLP(args.archi, activation=activation)
-
+    elif args.model=='LatMLP':
+        model = Lat_P_MLP(args.archi, activation=activation)
     elif args.model.find('CNN')!=-1:
 
         if args.task=='MNIST':
@@ -181,13 +182,13 @@ if args.load_path=='':
                 model = VF_CNN(28, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                                    activation=activation, softmax=args.softmax, same_update=args.same_update)
 
-        elif args.task=='CIFAR10':    
-           pools = make_pools(args.pools)
-           channels = [3]+args.channels
-           if args.model=='CNN':
+        elif args.task=='CIFAR10':
+            pools = make_pools(args.pools)
+            channels = [3]+args.channels
+            if args.model=='CNN':
                 model = P_CNN(32, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                               activation=activation, softmax=args.softmax)
-           elif args.model=='VFCNN':
+            elif args.model=='VFCNN':
                 model = VF_CNN(32, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                               activation=activation, softmax = args.softmax, same_update=args.same_update)
         
@@ -202,6 +203,8 @@ if args.load_path=='':
 
     if args.scale is not None:
         model.apply(my_init(args.scale))
+        if args.model=='LatMLP':
+            model.lat_syn.apply(torch.nn.init.zeros_)
 else:
     model = torch.load(args.load_path + '/model.pt', map_location=device)
 
@@ -231,6 +234,12 @@ if args.todo=='train':
                 optim_params.append( {'params': model.B_syn[idx].parameters(), 'lr': args.lrs[idx+1]} )
             else:
                 optim_params.append( {'params': model.B_syn[idx].parameters(), 'lr': args.lrs[idx+1], 'weight_decay': args.wds[idx+1]} )
+    if hasattr(model, 'lat_syn'):
+        for idx in range(len(model.lat_syn)):
+            if args.wds is None:
+                optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lrs[idx]} )
+            else:
+                optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lrs[idx], 'weight_decay': args.wds[idx+1]} )
 
 
     if args.optim=='sgd':
