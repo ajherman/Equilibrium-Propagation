@@ -1,18 +1,17 @@
+module EnergyModels
+using CUDA
 using Flux
-using MLDatsets: CIFAR10, MNIST
-using Base.Iterators: partition
 using Dates
 using Random
 using JLD2
 
-function energymodel(archi, x, synapses, beta, y, T)
-    neurons = zeros(archi)
+function energymodel(neurons, x, y, synapses, beta, T)
     ascendphi = Flux.setup(Flux.Descent(1), neurons)
 
     for t in 1:T
         phi = 0
         
-        phi, grads = Flux.widthgradient(neurons) do
+        phi, grads = Flux.withgradient(neurons) do
             phi += synapses[1](x) * neurons[1]
             for idx in 2:length(synapses)
                 phi += sum( synapses[idx](neurons[idx-1]) * neurons[idx], dims=1 ) # sum across neuron dimension not layer or batch
@@ -31,13 +30,13 @@ end
 
 
 function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs,
-                        random_sign=false, save=false, path="", checkpoint=nothing, thirdphase=false)
+                        ; random_sign=false, save=false, path="", checkpoint=nothing, thirdphase=false)
     
-    mbs = size(train_loader)[end]
-    iter_per_epochs = length(train_loader)
+    mbs = Flux.batchsize(train_loader)
+    iter_per_epochs = length(train_loader)/mbs
     starttime = Dates.now()
 
-    if checkpoint is nothing
+    if checkpoint == nothing
         train_acc = [0.0]
         test_acc = [0.0]
         best = 0.0
@@ -57,7 +56,7 @@ function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, 
         run_total = 0
 
         for (idx, (x, y)) in enumerate(train_loader)
-            neurons = zeros(archi) |> device
+            neurons = collect([zeros(n) for n in archi]) |> device
 
             # first phase
             neurons = energymodel(neurons, x, y, synapses, betas[1], T1)
@@ -137,4 +136,5 @@ function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, 
         jldsave(path * "/final.jld2", model_state=save_dic)
     end
 
+end
 end
