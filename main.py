@@ -17,6 +17,8 @@ import sys
 from model_utils import *
 from data_utils import *
 
+from lateral_models import *
+
 parser = argparse.ArgumentParser(description='Eqprop')
 parser.add_argument('--model',type = str, default = 'MLP', metavar = 'm', help='model')
 parser.add_argument('--task',type = str, default = 'MNIST', metavar = 't', help='task')
@@ -55,6 +57,14 @@ parser.add_argument('--thirdphase', default = False, action = 'store_true', help
 parser.add_argument('--softmax', default = False, action = 'store_true', help='softmax loss with parameters (default: False)')
 parser.add_argument('--same-update', default = False, action = 'store_true', help='same update is applied for VFCNN back and forward')
 parser.add_argument('--cep-debug', default = False, action = 'store_true', help='debug cep')
+
+
+parser.add_argument('--use-lateral', default = False, action = 'store_true', help='whether to enable the lateral/hopfield interactions (default: False)')
+parser.add_argument('--lat-init-zeros', default = False, action = 'store_true', help='whether to initialze the lateral/hopfield interactions with zeros (default: False)')
+parser.add_argument('--lat-lrs', nargs='+', type = float, default = [], metavar = 'l', help='lateral connection set wise lr')
+parser.add_argument('--head-lrs', nargs='+', type = float, default = [], metavar = 'l', help='(multi-head CNN) head-encoder-layer wise lr')
+parser.add_argument('--lat-wds', nargs='+', type = float, default = None, metavar = 'l', help='lateral connection set weight decays')
+parser.add_argument('--save-nrn', default = False, action = 'store_true', help='not sure what this is supposed to be for. it was in the check/*.sh, but not in main.py so it originally errored.')
 
 args = parser.parse_args()
 command_line = ' '.join(sys.argv)
@@ -181,6 +191,9 @@ if args.load_path=='':
             elif args.model=='VFCNN':
                 model = VF_CNN(28, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                                    activation=activation, softmax=args.softmax, same_update=args.same_update)
+            elif args.model=='MH_CNN':
+                model = Lat_MH_CNN([50 for i in range(10)], 28, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
+                                    activation=activation, softmax=args.softmax, same_update=args.same_update)
 
         elif args.task=='CIFAR10':
             pools = make_pools(args.pools)
@@ -191,6 +204,9 @@ if args.load_path=='':
             elif args.model=='VFCNN':
                 model = VF_CNN(32, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                               activation=activation, softmax = args.softmax, same_update=args.same_update)
+            elif args.model=='Lat_MH_CNN':
+                model = Lat_MH_CNN([50 for i in range(10)], 32, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
+                                    activation=activation, softmax=args.softmax)
         
         elif args.task=='imagenet':   #only for gducheck
             pools = make_pools(args.pools)
@@ -203,8 +219,11 @@ if args.load_path=='':
 
     if args.scale is not None:
         model.apply(my_init(args.scale))
-        if args.model=='LatMLP':
-            model.lat_syn.apply(torch.nn.init.zeros_)
+        if not(args.use_lateral) or args.lat_init_zeros:
+            if args.model=='LatMLP':
+                model.lat_syn.apply(torch.nn.init.zeros_)
+            elif args.model == 'Lat_MH_CNN':
+                model.head_hopfield.apply(torch.nn.init.zero_)
 else:
     model = torch.load(args.load_path + '/model.pt', map_location=device)
 
@@ -234,13 +253,25 @@ if args.todo=='train':
                 optim_params.append( {'params': model.B_syn[idx].parameters(), 'lr': args.lrs[idx+1]} )
             else:
                 optim_params.append( {'params': model.B_syn[idx].parameters(), 'lr': args.lrs[idx+1], 'weight_decay': args.wds[idx+1]} )
-    if hasattr(model, 'lat_syn'):
-        for idx in range(len(model.lat_syn)):
+    if hasattr(model, 'head_encoders'):
+        for idx in range(len(model.head_encoders)):
             if args.wds is None:
-                optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lrs[idx]} )
+                optim_params.append( {'params': model.head_encoders[idx].parameters(), 'lr': args.head_lrs[idx]} )
             else:
-                optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lrs[idx], 'weight_decay': args.wds[idx+1]} )
-
+                optim_params.append( {'params': model.head_encoders[idx].parameters(), 'lr': args.head_lrs[idx], 'weight_decay': args.head_wds[idx+1]} )
+    if args.use_lateral:
+        if hasattr(model, 'lat_syn'):
+            for idx in range(len(model.lat_syn)):
+                if args.wds is None:
+                    optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lat_lrs[idx]} )
+                else:
+                    optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lat_lrs[idx], 'weight_decay': args.lat_wds[idx]} )
+        if hasattr(model, 'head_hopfield'):
+            for idx in range(len(model.head_hopfield)):
+                if args.wds is None:
+                    optim_params.append( {'params': model.head_hopfield[idx].parameters(), 'lr': args.lat_lrs[idx]} )
+                else:
+                    optim_params.append( {'params': model.head_hopfield[idx].parameters(), 'lr': args.lat_lrs[idx], 'weight_decay': args.lat_wds[idx]} )
 
     if args.optim=='sgd':
         optimizer = torch.optim.SGD( optim_params, momentum=args.mmt )
@@ -275,37 +306,6 @@ if args.todo=='train':
 
 
 elif args.todo=='gducheck':
-    print('\ntraining algorithm : ',args.alg, '\n')
-    if args.save and args.load_path=='':
-        createHyperparametersFile(path, args, model, command_line)
- 
-    if args.task != 'imagenet':
-        dataiter = iter(train_loader)
-        images, labels = dataiter.next()
-        images, labels = images[0:20,:], labels[0:20]
-        images, labels = images.to(device), labels.to(device)
-    else:
-        images = []
-        all_files = glob.glob('imagenet_samples/*.JPEG')
-        for idx, filename in enumerate(all_files):
-            if idx>2:
-                break
-            image = Image.open(filename)
-            image = torchvision.transforms.functional.center_crop(image, 224)
-            image = torchvision.transforms.functional.to_tensor(image)
-            image.unsqueeze_(0)
-            image = image.add_(-image.mean()).div_(image.std())
-            images.append(image)
-        labels = torch.randint(1000, (len(images),))
-        images = torch.cat(images, dim=0)
-        images, labels = images.to(device), labels.to(device)
-        print(images.shape)
-
-    BPTT, EP = check_gdu(model, images, labels, args.T1, args.T2, betas, criterion, alg=args.alg)
-    if args.thirdphase:
-        beta_1, beta_2 = args.betas
-        _, EP_2 = check_gdu(model, images, labels, args.T1, args.T2, (beta_1, -beta_2), criterion, alg = args.alg)
-
     RMSE(BPTT, EP)
     if args.save:
         bptt_est = get_estimate(BPTT) 
