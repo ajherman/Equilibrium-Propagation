@@ -16,6 +16,13 @@ s = ArgParseSettings(autofix_names = true)
     "--archi"
         help = "architecture"
         default = [784, 512, 10]
+        nargs = '*'
+        arg_type = Int
+    "--lrs"
+        help = "learning rates per layer"
+        default = [5f-4, 4f-4]
+        nargs = '*'
+        arg_type = Float32
     "--act"
         help = "activation function"
         default = "mysig"
@@ -28,18 +35,24 @@ s = ArgParseSettings(autofix_names = true)
     "--mbs"
         help = "minibatch size"
         default = 100
+        arg_type = Int
     "--T1"
         help = "duration of first phase"
         default = 100
+        arg_type = Int
     "--T2"
         help = "duration of second phase"
         default = 10
+        arg_type = Int
     "--betas"
         help = "betas (nudging strength. First value should be 0 for free phase)"
-        default = [0.0, 0.01]
+        default = [0.0f0, 0.01f0]
+        nargs = 2
+        arg_type = Float32
     "--epochs"
         help = "number of epochs to train for"
         default = 1
+        arg_type = Int
     "--random-sign"
         help = "run in random sign mode (randomly flip beta of phase 2)"
         action = :store_true
@@ -48,7 +61,7 @@ s = ArgParseSettings(autofix_names = true)
         action = :store_true
     "--save"
         help = "save the model to disk?"
-        default = true
+        action = :store_true
     "--todo"
         help = "'train', ()"
         default = "train"
@@ -99,16 +112,16 @@ end
 
 # Activation functions
 function my_sigmoid(x)
-    return 1/(1+torch.exp(-4*(x-0.5)))
+    return 1/(1+exp(-4*(x-0.5)))
 end
 function hard_sigmoid(x)
-    return (1+F.hardtanh(2*x-1))*0.5
+    return (1+Flux.hardtanh(2*x-1))*0.5
 end
 function ctrd_hard_sig(x)
-    return (F.hardtanh(2*x))*0.5
+    return (Flux.hardtanh(2*x))*0.5
 end
 function my_hard_sig(x)
-    return (1+F.hardtanh(x-1))*0.5
+    return (1+Flux.hardtanh(x-1))*0.5
 end
 
 if args.act=="mysig"
@@ -131,10 +144,10 @@ end
 
 if args.load_path == ""
     if args.model == "MLP"
-        archi = vcat(nlabels, args.archi)
+        # archi = vcat(nlabels, args.archi)
+        archi = args.archi
         synapses = collect([Dense(archi[i] => archi[i+1], activation, bias=true, init=Flux.glorot_uniform) for i in 1:length(archi)-1])
     end
-    optimizer = Flux.Adam(0.01)
 else
     save_state = JLD2.load(args.load_path * "/checkpoint.jld2", "model_state")
     archi = save_state.archi
@@ -153,10 +166,15 @@ if args.todo == "train"
     else
         throw(error("invalid dataset $(args.dataset)"))
     end
-    train_loader = Flux.BatchView(Dataset(split=:train)[:], batchsize=mbs)
-    test_loader  = Flux.BatchView(Dataset(split=:test)[:])
+    train_loader = Flux.BatchView(Flux.shuffleobs(Dataset(split=:train)), batchsize=mbs)
+    test_loader  = Flux.BatchView(Flux.shuffleobs(Dataset(split=:test )), batchsize=mbs)
 
-    println(optimizer)
-    EnergyModels.trainEP(archi, synapses, optimizer, train_loader, test_loader, args.T1, args.T2, args.betas, device, args.epochs,
+    layeroptimizers = []
+    for idx in 1:length(synapses)
+        append!(layeroptimizers, [Flux.setup(Flux.Adam(args.lrs[idx]), synapses[idx])])
+    end
+
+    println(string(layeroptimizers)[1:300], "...")
+    EnergyModels.trainEP(archi, synapses, layeroptimizers, train_loader, test_loader, args.T1, args.T2, args.betas, device, args.epochs,
             random_sign=args.random_sign, save=args.save, path=path, thirdphase=args.thirdphase)
 end
