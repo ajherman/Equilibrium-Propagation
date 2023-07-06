@@ -12,7 +12,8 @@ function Phi(synapses, x, y, neurons, beta)
     for idx in 1:length(synapses)
         phi += sum( synapses[idx](layers[idx]) .* layers[idx+1] ) # sum across neuron dimension not layer
     end
-    phi -= sum( beta*Flux.crossentropy(neurons[end], y) )
+    # phi -= sum( beta*Flux.crossentropy(neurons[end], y) )
+    phi -= Flux.mse(neurons[end], y)
     return phi
 end
 
@@ -115,7 +116,9 @@ function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, 
             end
             
             # update weights
+            println("syn before $(sum(synapses[1].weight))")
             Flux.update!.(optimizer, synapses, grads)
+            println("syn after $(sum(synapses[1].weight))")
             
             # print progress
             if mod(idx, round(iter_per_epochs/10)) == 0 || idx == iter_per_epochs-1
