@@ -9,7 +9,7 @@ function Phi(synapses, x, y, neurons, beta)
     phi = 0.0f0
     x = reshape(x, (:, size(x)[end]))
     layers = vcat([x], neurons)
-    for idx in 1:length(synapses)
+    for idx in eachindex(synapses)
         phi += sum( synapses[idx](layers[idx]) .* layers[idx+1] ) # sum across neuron dimension not layer
     end
     # phi -= sum( beta*Flux.crossentropy(neurons[end], y) )
@@ -56,7 +56,7 @@ function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, 
     iter_per_epochs = length(train_loader)
     starttime = Dates.now()
 
-    if checkpoint == nothing
+    if checkpoint === nothing
         train_acc = [0.0]
         test_acc = [0.0]
         best = 0.0

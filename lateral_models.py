@@ -337,7 +337,7 @@ class fake_softmax_CNN(P_CNN):
         # and set them based on the inputs to the last layer, so they are always more inhibitory than the input can overcome
         with torch.no_grad():
             inhibitstrength = self.synapses[-1].weight.sum()/10 # amount a given neuron would be stimulated if previous layer was fully active
-            self.lat_syn.weight = torch.nn.Parameter(torch.full(self.lat_syn.weight.size(), -inhibitstrength)
+            self.lat_syn.weight = torch.nn.Parameter(torch.full(self.lat_syn.weight.size(), -inhibitstrength))
             self.lat_syn.weight = self.lat_syn.weight + inhibitstrength*torch.eye(self.lat_syn.weight.size()[1]) # remove self-connections
             # self.head_hopfield[j].weight = torch.nn.Parameter(0.5 * (self.head_hopfield[j].weight + self.head_hopfield[j].weight.T))
 
