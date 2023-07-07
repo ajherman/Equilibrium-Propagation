@@ -21,7 +21,7 @@ class Lat_P_MLP(torch.nn.Module):
         # Lateral synapses (connections between neurons within a layer, not to a different layer)
         self.lat_syn = torch.nn.ModuleList()
         for idx in range(1, len(archi)):
-            self.lat_syn.append(torch.nn.Linear(archi[idx], archi[idx], bias=True))
+            self.lat_syn.append(torch.nn.Linear(archi[idx], archi[idx], bias=False))
 
             
     def Phi(self, x, y, neurons, beta, criterion):
@@ -91,6 +91,15 @@ class Lat_P_MLP(torch.nn.Module):
 
 
     def compute_syn_grads(self, x, y, neurons_1, neurons_2, betas, criterion, check_thm=False):
+        # force hopfield / lateral connections to be symmetric (backwards and forward weights the same)
+        for j in range(len(self.lat_syn)):
+            with torch.no_grad():
+                self.lat_syn[j].weight = torch.nn.Parameter(0.5 * (self.lat_syn[j].weight + self.lat_syn[j].weight.T) - torch.diag(torch.diagonal(self.lat_syn[j].weight)) )
+                # unlike the inter-layer connections, not each weight represents a unique pair of neurons.
+                # the upper and lower triangle of this square matrix are the backwards and forwards connections
+                # these need to be the same here.
+                # also removing the diagonal (neuron self connections). But maybe this would be valid to keep?
+
         # Computing the EP update given two steady states neurons_1 and neurons_2, static input x, label y
         beta_1, beta_2 = betas
         
