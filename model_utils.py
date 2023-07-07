@@ -193,6 +193,32 @@ class P_MLP(torch.nn.Module):
         delta_phi.backward() # p.grad = -(d_Phi_2/dp - d_Phi_1/dp)/(beta_2 - beta_1) ----> dL/dp  by the theorem
         
 
+# MLP with analytically computed energy model rule (rather than computing grad of Phi)
+class MLP_Analytical(P_MLP):
+    def __init__(self, archi, activation=torch.tanh):
+        super(MLP_Analytical, self).__init__(archi, activation)
+
+    def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
+        x = x.view(x.size(0),-1) # flattening the input
+        layers = [x] + neurons 
+        dn = [] # tendency of neurons
+        for idx in range(1, len(layers)): # exclude input layer
+            dn.append(torch.zeros_like(layers[idx]))
+
+        with torch.no_grad():
+            for t in range(T):
+                for idx in range(1, len(layers)-1):
+                    dn[idx-1] = self.synapses[idx-1](layers[idx-1]) # input from previous layer
+                    dn[idx-1] += torch.matmul(self.synapses[idx].weight.t(), (layers[idx+1]-self.synapses[idx].bias).T ).T # input from next layer
+                nudge = beta * (F.one_hot(y, num_classes=self.nc) - layers[-1]) # is grad(MSE(y, pred)) w/r to neurons
+                dn[-1] = self.synapses[-1](layers[-2]) + nudge 
+                for idx in range(len(dn)):
+                    dn[idx] -= layers[idx+1] # exponential decay 
+                    layers[idx+1] = self.activation(layers[idx+1] + dn[idx])
+        
+        return layers[1:]
+            
+    
          
 # Vector Field Multi-Layer Perceptron
 

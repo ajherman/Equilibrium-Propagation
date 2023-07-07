@@ -12,12 +12,12 @@ function Phi(synapses, x, y, neurons, beta)
     for idx in eachindex(synapses)
         phi += sum( synapses[idx](layers[idx]) .* layers[idx+1] ) # sum across neuron dimension not layer
     end
-    # phi -= sum( beta*Flux.crossentropy(neurons[end], y) )
-    phi -= Flux.mse(neurons[end], y)
+    # phi -= beta*Flux.crossentropy(neurons[end], y)
+    phi -= beta*Flux.mse(neurons[end], y)
     return phi
 end
 
-function energymodel(synapses, x, y, neurons, T, beta)
+function energymodelimplicit(synapses, x, y, neurons, T, beta)
     ascendphi = Flux.setup(Flux.Descent(1), neurons)
 
     for t in 1:T
@@ -26,11 +26,33 @@ function energymodel(synapses, x, y, neurons, T, beta)
             Phi(synapses, x, y, n, beta)
         end
         
-        Flux.update!(ascendphi, neurons, neurongrads[1])
-        # neurons = neurongrads[1]
+        # Flux.update!(ascendphi, neurons, neurongrads[1])
+        neurons[:] = neurongrads[1][:]
+        neurons = Flux.sigmoid(neurons)
     end
 
     return neurons
+end
+
+function energymodelanalytical(synapses, x, y, neurons, T, beta)
+    x = reshape(x, (:, size(x)[end]))
+    layers = vcat([x], neurons)
+    dn = collect([zero(n) for n in neurons]) 
+    for t in 1:T
+        for idx in eachindex(layers)[2:end-1]
+            dn[idx-1] = synapses[idx-1](layers[idx-1])
+            dn[idx-1] += synapses[idx].weight' * (layers[idx+1] .-synapses[idx].bias)
+        end
+        dn[end] = synapses[end](layers[end-1])
+        nudge = beta * (y - layers[end]) # analytical gradient of MSE(y, pred)
+        dn[end] += nudge
+        for idx in eachindex(dn)
+            dn[idx] -= layers[idx+1] # exponential decay
+            layers[idx+1] = Flux.sigmoid(layers[idx+1] + dn[idx])
+        end
+    end
+
+    return layers[2:end]
 end
 
 
@@ -50,6 +72,7 @@ end
 
 function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs,
                         ; random_sign=false, save=false, path="", checkpoint=nothing, thirdphase=false)
+    energymodel = energymodelimplicit # energymodelanalytical
     
     mbs = Flux.batchsize(train_loader)
     # mbs = size(first(train_loader)[1])[end]
@@ -75,6 +98,12 @@ function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, 
     synapses = synapses |> device
     optimizer = optimizer .|> device
     initneurons = collect([zeros(n, mbs) for n in archi[2:end]]) |> device
+    neurons_1 = collect([zeros(n, mbs) for n in archi[2:end]]) |> device
+    neurons_2 = collect([zeros(n, mbs) for n in archi[2:end]]) |> device
+    if thirdphase
+        neurons_3 = collect([zeros(n, mbs) for n in archi[2:end]]) |> device
+    end
+    neurons = collect([zeros(n, mbs) for n in archi[2:end]]) |> device
     for epoch in 1:epochs
         run_correct = 0
         run_total = 0
@@ -82,11 +111,11 @@ function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, 
         for (idx, (x, y)) in enumerate(train_loader)
             x = x |> device
             y = float.(Flux.onehotbatch(y, labels)) |> device
-            neurons = copy(initneurons)
+            neurons[:] .= initneurons[:]
 
             # first phase
             neurons = energymodel(synapses, x, y, neurons, T1, betas[1])
-            neurons_1 = copy(neurons)
+            neurons_1[:] .= neurons[:]
 
             # measure accuracy
             pred = Flux.onecold(neurons_1[end])
@@ -101,12 +130,12 @@ function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, 
                 sgn = 1
             end
 
-            neurons = energymodel(synapses, x, y, neurons_1, T2, betas[2]*sgn)
+            neurons = energymodel(synapses, x, y, neurons, T2, betas[2]*sgn)
 
             # third phase 
             if thirdphase
-                neurons_2 = copy(neurons)
-                neurons = copy(neurons_1)
+                neurons_2[:] .= neurons[:]
+                neurons[:] .= neurons_1[:]
                 neurons = energymodel(synapses, x, y, neurons, T2, -betas[2])
                 neurons_3 = copy(neurons)
                 
@@ -116,12 +145,10 @@ function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, 
             end
             
             # update weights
-            println("syn before $(sum(synapses[1].weight))")
             Flux.update!.(optimizer, synapses, grads)
-            println("syn after $(sum(synapses[1].weight))")
             
             # print progress
-            if mod(idx, round(iter_per_epochs/10)) == 0 || idx == iter_per_epochs-1
+            if mod(idx, round(iter_per_epochs/10)) == 0
                 run_acc = run_correct / run_total
                 timesince = Dates.now() - starttime
                 percent = (idx + (epoch-1)*iter_per_epochs) / (epochs*iter_per_epochs)
@@ -145,7 +172,7 @@ function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, 
             label = Flux.onecold(y)
             test_correct += sum((pred .== label))
         end
-        test_acc_t = test_correct/(length(test_loader))
+        test_acc_t = test_correct/(length(test_loader))/mbs
         println("Test acc : $(test_acc_t)")
 
         # save to file

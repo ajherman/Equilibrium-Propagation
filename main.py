@@ -175,7 +175,8 @@ if args.load_path=='':
 
     if args.model=='MLP':
         model = P_MLP(args.archi, activation=activation)
-
+    elif args.model=='AnalyticalMLP':
+        model = MLP_Analytical(args.archi, activation=activation)
     elif args.model=='VFMLP':
         model = VF_MLP(args.archi, activation=activation)
     elif args.model=='LatMLP':
