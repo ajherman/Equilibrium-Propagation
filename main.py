@@ -192,9 +192,12 @@ if args.load_path=='':
             elif args.model=='VFCNN':
                 model = VF_CNN(28, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                                    activation=activation, softmax=args.softmax, same_update=args.same_update)
-            elif args.model=='MH_CNN':
+            elif args.model=='Lat_MH_CNN':
                 model = Lat_MH_CNN([50 for i in range(10)], 28, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                                     activation=activation, softmax=args.softmax, same_update=args.same_update)
+            elif args.model=='LatSoftCNN':
+                model = fake_softmax_CNN(28, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
+                                  activation=activation, softmax=False)
 
         elif args.task=='CIFAR10':
             pools = make_pools(args.pools)

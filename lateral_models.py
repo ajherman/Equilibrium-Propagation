@@ -263,17 +263,20 @@ class Lat_MH_CNN(P_CNN):
 class fake_softmax_CNN(P_CNN):
     def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=hard_sigmoid, softmax=False):
         # initialize default P_CNN structure, without the final fully connected layer (pass in the last layer to store proper output size)
-        softmax = false
+        softmax = False
         
-        super(Lat_MH_CNN, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax) 
+        super(fake_softmax_CNN, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax) 
         
         self.lat_syn = torch.nn.Linear(fc[-1], fc[-1], bias=False) 
+        inhibitstrength = 1.0
+        self.lat_syn.weight.data = torch.full(self.lat_syn.weight.size(), -inhibitstrength)
+        self.lat_syn.weight.data -= torch.diag(torch.diag(self.lat_syn.weight.data)) # zero the diagonal (self-connection)
+        print(self.lat_syn.weight)
 
-    def Phi(self, x, y, neurons, beta, criterion):
+    def Phi(self, x, y, neurons, beta, criterion, use_lat=False):
 
         mbs = x.size(0)       
         conv_len = len(self.kernels)
-        heads = len(self.lat_heads)
         tot_len = len(self.synapses)
 
         layers = [x] + neurons        
@@ -286,12 +289,12 @@ class fake_softmax_CNN(P_CNN):
            
         if not self.softmax:
             for idx in range(conv_len, tot_len):
-                layeridx = idx + 1 # head encoders and lateral synapses not in synapses[]  but head neurons are in layers[]
-                phi += torch.sum( self.synapses[idx](layers[layeridx].view(mbs,-1)) * layers[layeridx+1], dim=1).squeeze()
+                phi += torch.sum( self.synapses[idx](layers[idx].view(mbs,-1)) * layers[idx+1], dim=1).squeeze()
             
-            # apply competitive lateral connection to readout classification layer for softmax-like behaviour
-            phi += torch.sum( self.lat_syn(layers[-1]) * layers[-1], dim=1).squeeze()
-             
+            if use_lat:
+                # apply competitive lateral connection to readout classification layer for softmax-like behaviour
+                phi += torch.sum( self.lat_syn(layers[-1]) * layers[-1], dim=1 ).squeeze()
+
             if beta!=0.0:
                 if criterion.__class__.__name__.find('MSE')!=-1:
                     y = F.one_hot(y, num_classes=self.nc)
@@ -313,6 +316,48 @@ class fake_softmax_CNN(P_CNN):
         
         return phi
     
+    def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
+ 
+        not_mse = (criterion.__class__.__name__.find('MSE')==-1)
+        mbs = x.size(0)
+        device = x.device     
+        
+        if check_thm:
+            for t in range(T):
+                phi = self.Phi(x, y, neurons, beta, criterion, use_lat=(t > T/2))
+                init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
+                grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=True)
+
+                for idx in range(len(neurons)-1):
+                    neurons[idx] = self.activation( grads[idx] )
+                    neurons[idx].retain_grad()
+             
+                if not_mse and not(self.softmax):
+                    neurons[-1] = grads[-1]
+                else:
+                    neurons[-1] = self.activation( grads[-1] )
+
+                neurons[-1].retain_grad()
+        else:
+             for t in range(T):
+                phi = self.Phi(x, y, neurons, beta, criterion)
+                init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
+                grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=False)
+
+                for idx in range(len(neurons)-1):
+                    neurons[idx] = self.activation( grads[idx] )
+                    neurons[idx].requires_grad = True
+             
+                if not_mse and not(self.softmax):
+                    neurons[-1] = grads[-1]
+                else:
+                    neurons[-1] = self.activation( grads[-1] )
+
+                neurons[-1].requires_grad = True
+
+        return neurons
+
+
     def init_neurons(self, mbs, device):
         neurons = []
         append = neurons.append
@@ -341,15 +386,6 @@ class fake_softmax_CNN(P_CNN):
     def compute_syn_grads(self, x, y, neurons_1, neurons_2, betas, criterion, check_thm=False):
         
         beta_1, beta_2 = betas
-        
-        # force lateral connections to be symmetric (backwards and forward weights the same)
-        # and set them based on the inputs to the last layer, so they are always more inhibitory than the input can overcome
-        with torch.no_grad():
-            inhibitstrength = self.synapses[-1].weight.sum()/10 # amount a given neuron would be stimulated if previous layer was fully active
-            self.lat_syn.weight = torch.nn.Parameter(torch.full(self.lat_syn.weight.size(), -inhibitstrength))
-            self.lat_syn.weight = self.lat_syn.weight + inhibitstrength*torch.eye(self.lat_syn.weight.size()[1]) # remove self-connections
-            # self.head_hopfield[j].weight = torch.nn.Parameter(0.5 * (self.head_hopfield[j].weight + self.head_hopfield[j].weight.T))
-
 
         self.zero_grad()            # p.grad is zero
         if not(check_thm):

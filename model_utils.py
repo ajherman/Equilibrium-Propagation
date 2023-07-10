@@ -209,7 +209,7 @@ class MLP_Analytical(P_MLP):
             for t in range(T):
                 for idx in range(1, len(layers)-1):
                     dn[idx-1] = self.synapses[idx-1](layers[idx-1]) # input from previous layer
-                    dn[idx-1] += torch.matmul(self.synapses[idx].weight.t(), (layers[idx+1]-self.synapses[idx].bias).T ).T # input from next layer
+                    dn[idx-1] += torch.matmul(self.synapses[idx].weight.t(), (layers[idx+1]).T ).T # input from next layer ## layers[idx+1]-self.synapses[idx].bias
                 nudge = beta * (F.one_hot(y, num_classes=self.nc) - layers[-1]) # is grad(MSE(y, pred)) w/r to neurons
                 dn[-1] = self.synapses[-1](layers[-2]) + nudge 
                 for idx in range(len(dn)):
@@ -425,7 +425,11 @@ class P_CNN(torch.nn.Module):
              
             # the prediction is made with softmax[last weights[penultimate layer]]
             if beta!=0.0:
-                L = criterion(self.synapses[-1](layers[-1].view(mbs,-1)).float(), y).squeeze()             
+                if criterion.__class__.__name__.find('MSE')!=-1:
+                    y = F.one_hot(y, num_classes=self.nc)
+                    L = 0.5*criterion(self.synapses[-1](layers[-1].view(mbs,-1)).float(), y.float()).sum(dim=1).squeeze()   
+                else:
+                    L = criterion(self.synapses[-1](layers[-1].view(mbs,-1)).float(), y).squeeze()  
                 phi -= beta*L            
         
         return phi
@@ -515,6 +519,48 @@ class P_CNN(torch.nn.Module):
  
            
    
+
+
+# CNN with analytically computed energy model rule (equation of motion rather than computing grad of Phi computationaly)
+class CNN_Analytical(P_CNN):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=hard_sigmoid, softmax=False):
+        super(CNN_Analytical, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, activation=hard_sigmoid, softmax=False)
+
+        self.syn_transpose = []
+        for idx in range(len(self.synapses)):
+            layer = self.synapses[idx]
+            if isinstance(layer, torch.nn.Conv2d):
+                transpose = torch.nn.ConvTranspose2d(layer.out_channels, layer.in_channels, layer.kernel_size, stride=layer.stride,
+                                        padding=layer.padding, dilation=layer.dilation)
+                transpose.weight.data = layer.weight.data
+                transpose.bias.data = torch.zeros_like(tranpose.bias.data)
+            elif isinstance(layer, torch.nn.Linear):
+                transpose = torch.nn.Linear(layer.out_features, layer.in_features, bias=False)
+                transpose.weight.data = layer.weight.data.T
+            self.syn_transpose.append(transpose)
+
+    def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
+        x = x.view(x.size(0),-1) # flattening the input
+        layers = [x] + neurons 
+        dn = [] # tendency of neurons
+        for idx in range(1, len(layers)): # exclude input layer
+            dn.append(torch.zeros_like(layers[idx]))
+
+        with torch.no_grad():
+            for t in range(T):
+                for idx in range(1, len(layers)-1):
+                    dn[idx-1] = self.synapses[idx-1](layers[idx-1]) # input from previous layer
+                    dn[idx-1] += self.syn_transpose[idx](layers[idx+1]) # input from next layer
+                nudge = beta * (F.one_hot(y, num_classes=self.nc) - layers[-1]) # is grad(MSE(y, pred)) w/r to neurons
+                dn[-1] = self.synapses[-1](layers[-2]) + nudge 
+                for idx in range(len(dn)):
+                    dn[idx] -= layers[idx+1] # exponential decay 
+                    layers[idx+1] = self.activation(layers[idx+1] + dn[idx])
+        
+        return layers[1:] # neurons (layers excluding input)
+
+
+
  
 # Vector Field Convolutional Neural Network
 
@@ -949,6 +995,28 @@ def debug(model, prev_p, optimizer):
         #optimizer.param_groups[i]['weight_decay'] = prev_p['wds'+str(i)]
     optimizer.step()
 
+
+
+def updatetranpose(model):
+    if isinstance(model, fake_softmax_CNN):
+        inhibitstrength = 1
+        # # force lateral connections to be symmetric (backwards and forward weights the same)
+        # # and set them based on the inputs to the last layer, so they are always more inhibitory than the input can overcome
+        # with torch.no_grad():
+        #     inhibitstrength = self.synapses[-1].weight.sum()/10 # amount a given neuron would be stimulated if previous layer was fully active
+        #     self.lat_syn.weight = torch.nn.Parameter(torch.full(self.lat_syn.weight.size(), -inhibitstrength))
+        #     self.lat_syn.weight = self.lat_syn.weight + inhibitstrength*torch.eye(self.lat_syn.weight.size()[1]) # remove self-connections
+    elif isinstance(model, CNN_Analytical):
+        for idx in range(len(self.synapses)):
+            layer = self.synapses[idx]
+            transpose = self.syn_transpose[idx]
+            if isinstance(layer, torch.nn.Conv2d):
+                transpose.weight.data = layer.weight.data
+                # transpose.bias.data = torch.zeros_like(tranpose.bias.data)
+            elif isinstance(layer, torch.nn.Linear):
+                transpose.weight.data = layer.weight.data.T
+
+
         
 def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs, criterion, alg='EP', 
           random_sign=False, save=False, check_thm=False, path='', checkpoint=None, thirdphase = False, scheduler=None, cep_debug=False):
@@ -1075,6 +1143,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                         neurons_3 = copy(neurons)
                         model.compute_syn_grads(x, y, neurons_2, neurons_3, (beta_2, -beta_2), criterion)
                         optimizer.step()
+                        updatetranspose(model)
                         neurons_2 = copy(neurons)
 
             elif alg=='BPTT':
