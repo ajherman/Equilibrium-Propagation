@@ -1,5 +1,6 @@
 *.txt
-results/
+results/**/*.pt
+results/**/*.tar
 __pycache__/
 cifar10_pytorch/
 mnist_pytorch/
