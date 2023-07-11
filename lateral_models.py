@@ -324,7 +324,7 @@ class fake_softmax_CNN(P_CNN):
         
         if check_thm:
             for t in range(T):
-                phi = self.Phi(x, y, neurons, beta, criterion, use_lat=(t > T/2))
+                phi = self.Phi(x, y, neurons, beta, criterion, use_lat=True)
                 init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
                 grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=True)
 

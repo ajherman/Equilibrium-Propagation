@@ -1,0 +1,34 @@
+main.py --model CNN --task MNIST --channels 32 64 --kernels 5 5 --pools mm --strides 1 1 --fc 10 --optim adam --lrs 5e-5 1e-5 8e-6 --epochs 5 --act hard_sigmoid --todo train --betas 0.0 0.4 --T1 100 --T2 10 --mbs 100 --device 1 --save 
+
+- task: MNIST
+- data augmentation (if CIFAR10): False
+- learning rate decay: False
+- scale for weight init: None
+- activation: hard_sigmoid
+- learning rates: [5e-05, 1e-05, 8e-06]
+- weight decays: None
+- momentum (if sgd): 0.0
+- optimizer: adam
+- loss: mse
+- alg: EP
+- minibatch size: 100
+- T1: 100
+- T2: 10
+- betas: [0.0, 0.4]
+- random beta_2 sign: False
+- thirdphase: False
+- softmax: False
+- same update VFCNN: False
+- epochs: 5
+- seed: None
+- device: 1
+
+Poolings : [MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False), MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)] 
+
+P_CNN(
+  (synapses): ModuleList(
+    (0): Conv2d(1, 32, kernel_size=(5, 5), stride=(1, 1))
+    (1): Conv2d(32, 64, kernel_size=(5, 5), stride=(1, 1))
+    (2): Linear(in_features=1024, out_features=10, bias=True)
+  )
+)
