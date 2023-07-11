@@ -264,12 +264,12 @@ if args.todo=='train':
             else:
                 optim_params.append( {'params': model.head_encoders[idx].parameters(), 'lr': args.head_lrs[idx], 'weight_decay': args.head_wds[idx+1]} )
     if args.use_lateral:
-        if hasattr(model, 'lat_syn'):
-            for idx in range(len(model.lat_syn)):
-                if args.wds is None:
-                    optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lat_lrs[idx]} )
-                else:
-                    optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lat_lrs[idx], 'weight_decay': args.lat_wds[idx]} )
+        # if hasattr(model, 'lat_syn'):
+        #     for idx in range(len(model.lat_syn)):
+        #         if args.wds is None:
+        #             optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lat_lrs[idx]} )
+        #         else:
+        #             optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lat_lrs[idx], 'weight_decay': args.lat_wds[idx]} )
         if hasattr(model, 'head_hopfield'):
             for idx in range(len(model.head_hopfield)):
                 if args.wds is None:

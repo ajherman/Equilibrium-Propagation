@@ -268,10 +268,16 @@ class fake_softmax_CNN(P_CNN):
         super(fake_softmax_CNN, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax) 
         
         self.lat_syn = torch.nn.Linear(fc[-1], fc[-1], bias=False) 
-        inhibitstrength = 1.0
-        self.lat_syn.weight.data = torch.full(self.lat_syn.weight.size(), -inhibitstrength)
-        self.lat_syn.weight.data -= torch.diag(torch.diag(self.lat_syn.weight.data)) # zero the diagonal (self-connection)
+        self.set_lateral()
         print(self.lat_syn.weight)
+    def set_lateral(self):
+        # force lateral connections to be symmetric (backwards and forward weights the same)
+        # and set them based on the inputs to the last layer, so they are always more inhibitory than the input can overcome
+        with torch.no_grad():
+            inhibitstrength = F.relu(self.synapses[-1].weight.data).sum()/10 # average maximum activation (previous layer is fully active where weights are positive)
+            # this strength should be enough to completely kill all logits except one winner
+            self.lat_syn.weight.data = (torch.full(self.lat_syn.weight.size(), -inhibitstrength))
+            self.lat_syn.weight.data -= torch.diag(torch.diag(self.lat_syn.weight.data)) # zero the diagonal (self-connection)
 
     def Phi(self, x, y, neurons, beta, criterion, use_lat=False):
 
@@ -300,7 +306,7 @@ class fake_softmax_CNN(P_CNN):
                     y = F.one_hot(y, num_classes=self.nc)
                     L = 0.5*criterion(layers[-1].float(), y.float()).sum(dim=1).squeeze()   
                 else:
-                    L = criterion(layers[-1].float(), y).squeeze()             
+                    L = criterion(F.softmax(layers[-1].float()), y).squeeze()             
                 phi -= beta*L
 
         else:

@@ -997,16 +997,10 @@ def debug(model, prev_p, optimizer):
 
 
 
-def updatetranpose(model):
-    if isinstance(model, fake_softmax_CNN):
-        inhibitstrength = 1
-        # # force lateral connections to be symmetric (backwards and forward weights the same)
-        # # and set them based on the inputs to the last layer, so they are always more inhibitory than the input can overcome
-        # with torch.no_grad():
-        #     inhibitstrength = self.synapses[-1].weight.sum()/10 # amount a given neuron would be stimulated if previous layer was fully active
-        #     self.lat_syn.weight = torch.nn.Parameter(torch.full(self.lat_syn.weight.size(), -inhibitstrength))
-        #     self.lat_syn.weight = self.lat_syn.weight + inhibitstrength*torch.eye(self.lat_syn.weight.size()[1]) # remove self-connections
-    elif isinstance(model, CNN_Analytical):
+def updatetranspose(model):
+    if model.__class__.__name__ == 'fake_softmax_CNN':
+        model.set_lateral()
+    elif model.__class__.__name__ == 'CNN_Analytical':
         for idx in range(len(self.synapses)):
             layer = self.synapses[idx]
             transpose = self.syn_transpose[idx]
@@ -1105,6 +1099,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     model.compute_syn_grads(x, y, neurons_1, neurons_2, betas, criterion)
 
                 optimizer.step()      
+                updatetranspose(model)
 
             elif alg=='CEP':
                 if random_sign and (beta_1==0.0):
@@ -1143,7 +1138,6 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                         neurons_3 = copy(neurons)
                         model.compute_syn_grads(x, y, neurons_2, neurons_3, (beta_2, -beta_2), criterion)
                         optimizer.step()
-                        updatetranspose(model)
                         neurons_2 = copy(neurons)
 
             elif alg=='BPTT':
@@ -1168,13 +1162,17 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 print('Epoch :', round(epoch_sofar+epoch+(idx/iter_per_epochs), 2),
                       '\tRun train acc :', round(run_acc,3),'\t('+str(run_correct)+'/'+str(run_total)+')\t',
                       timeSince(start, ((idx+1)+epoch*iter_per_epochs)/(epochs*iter_per_epochs)))
+                print('L1, L10 : ', torch.norm(neurons_1[-1], 1, dim=1).sum().data/mbs, torch.norm(neurons_1[-1], 10, dim=1).sum().data/mbs)
                 if isinstance(model, VF_CNN): 
                     angle = model.angle()
                     print('angles ',angle)
                 if check_thm and alg!='BPTT':
                     BPTT, EP = check_gdu(model, x[0:5,:], y[0:5], T1, T2, betas, criterion, alg=alg)
                     RMSE(BPTT, EP)
-    
+        if model.__class__.__name__ == 'fake_softmax_CNN':
+            print('lateral inhibition : ', model.lat_syn.weight.data[0,1])
+        print('sample predictions : \n', torch.round(neurons_1[-1][1:10].data*100), '\n labels : ', y[1:10].data)
+
         if scheduler is not None: # learning rate decay step
             if epoch+epoch_sofar < scheduler.T_max:
                 scheduler.step()
