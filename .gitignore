@@ -1,4 +1,4 @@
-*.txt
+# *.txt
 results/**/*.pt
 results/**/*.tar
 results/**/*.jld2

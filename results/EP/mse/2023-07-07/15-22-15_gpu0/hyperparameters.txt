@@ -1,0 +1,30 @@
+main.py --model MLP --task MNIST --archi 784 512 10 --optim adam --lrs 5e-4 5e-4 --epochs 2 --act mysig --todo train --betas 0.0 0.1 --T1 30 --T2 10 --mbs 50 --device 0 --save --loss mse 
+
+- task: MNIST
+- data augmentation (if CIFAR10): False
+- learning rate decay: False
+- scale for weight init: None
+- activation: mysig
+- learning rates: [0.0005, 0.0005]
+- weight decays: None
+- momentum (if sgd): 0.0
+- optimizer: adam
+- loss: mse
+- alg: EP
+- minibatch size: 50
+- T1: 30
+- T2: 10
+- betas: [0.0, 0.1]
+- random beta_2 sign: False
+- thirdphase: False
+- softmax: False
+- same update VFCNN: False
+- epochs: 2
+- seed: None
+- device: 0
+P_MLP(
+  (synapses): ModuleList(
+    (0): Linear(in_features=784, out_features=512, bias=True)
+    (1): Linear(in_features=512, out_features=10, bias=True)
+  )
+)

@@ -1,0 +1,14 @@
+(EP) [rstrauss@darwin-fe2 Laborieux-Equilibrium-Propagation]$ sbatch -t 17:00 -C gpu_count:1 softmaxcheck710/softmax_cel.sh 
+Submitted batch job 15231639
+(EP) [rstrauss@darwin-fe2 Laborieux-Equilibrium-Propagation]$ sbatch -t 17:00 -C gpu_count:1 softmaxcheck710/softmax_mse.sh 
+Submitted batch job 15231640
+(EP) [rstrauss@darwin-fe2 Laborieux-Equilibrium-Propagation]$ sbatch -t 17:00 -C gpu_count:1 softmaxcheck710/plain_cel.sh 
+Submitted batch job 15231642
+(EP) [rstrauss@darwin-fe2 Laborieux-Equilibrium-Propagation]$ sbatch -t 17:00 -C gpu_count:1 softmaxcheck710/plain_mse.sh 
+Submitted batch job 15231643
+(EP) [rstrauss@darwin-fe2 Laborieux-Equilibrium-Propagation]$ sbatch -t 23:00 -C gpu_count:1 softmaxcheck710/lateraldecision_after_half_T_mse.sh 
+Submitted batch job 15231645
+(EP) [rstrauss@darwin-fe2 Laborieux-Equilibrium-Propagation]$ sbatch -t 23:00 -C gpu_count:1 softmaxcheck710/lateraldecision_after_half_T_cel.sh 
+Submitted batch job 15231646
+(EP) [rstrauss@darwin-fe2 Laborieux-Equilibrium-Propagation]$ 
+
