@@ -7,7 +7,6 @@ using JLD2
 
 function Phi(synapses, x, y, neurons, beta)
     phi = 0.0f0
-    x = reshape(x, (:, size(x)[end]))
     layers = vcat([x], neurons)
     for idx in eachindex(synapses)
         phi += sum( synapses[idx](layers[idx]) .* layers[idx+1] ) # sum across neuron dimension not layer
@@ -35,7 +34,6 @@ function energymodelimplicit(synapses, x, y, neurons, T, beta)
 end
 
 function energymodelanalytical(synapses, x, y, neurons, T, beta)
-    x = reshape(x, (:, size(x)[end]))
     layers = vcat([x], neurons)
     dn = collect([zero(n) for n in neurons]) 
     for t in 1:T
@@ -72,7 +70,8 @@ end
 
 function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs,
                         ; random_sign=false, save=false, path="", checkpoint=nothing, thirdphase=false)
-    energymodel = energymodelimplicit # energymodelanalytical
+    # energymodel = energymodelimplicit
+    energymodel = energymodelanalytical
     
     mbs = Flux.batchsize(train_loader)
     # mbs = size(first(train_loader)[1])[end]
@@ -109,6 +108,7 @@ function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, 
         run_total = 0
 
         for (idx, (x, y)) in enumerate(train_loader)
+            x = reshape(x, (:, size(x)[end])) # flatten image input for MLP
             x = x |> device
             y = float.(Flux.onehotbatch(y, labels)) |> device
             neurons[:] .= initneurons[:]

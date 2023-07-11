@@ -142,11 +142,31 @@ if args.task == "MNIST" || args.task == "CIFAR10"
     nlabels = 10
 end
 
+if args.task == "MNIST"
+    Dataset = MNIST
+    channels = vcat([1], args.channels)
+elseif args.task == "CIFAR10"
+    Dataset = CIFAR10
+    channels = vcat([3], args.channels) # rgb
+else
+    throw(error("invalid dataset $(args.dataset)"))
+end
+
+kernels = args.kernels
+@assert len(kernels) == len(channels)-1 "invalid architecture specification"
+
 if args.load_path == ""
     if args.model == "MLP"
         # archi = vcat(nlabels, args.archi)
         archi = args.archi
         synapses = collect([Dense(archi[i] => archi[i+1], activation, bias=true, init=Flux.glorot_uniform) for i in 1:length(archi)-1])
+    elseif args.model == "CNN"
+        synapses = collect([Conv((kernels[i], kernels[i]), channels[i] => channels[i+1], activation, bias=true, init=Flux.glorot_uniform) for i in eachindex(kernels)]) 
+        size = ...
+        for idx in eachidx(fc)
+            append!(synapses, Dense(size => fc[idx], activation, bias=true))
+            size = fc[idx]
+        end
     end
 else
     save_state = JLD2.load(args.load_path * "/checkpoint.jld2", "model_state")
@@ -159,13 +179,10 @@ synapses = synapses |> device
 
 
 if args.todo == "train"
-    if args.task == "MNIST"
-        Dataset = MNIST
-    elseif args.task == "CIFAR10"
-        Dataset = CIFAR10
-    else
-        throw(error("invalid dataset $(args.dataset)"))
-    end
+    if args.model == "MLP"
+        transform = x -> reshape(x, (:, size(x, end))) 
+    elseif args.model == "CNN"
+        transform = x -> reshape(x, (size(x)[1:2]..., channels[1], size(x)[end]))
     train_loader = Flux.BatchView(Flux.shuffleobs(Dataset(split=:train)), batchsize=mbs)
     test_loader  = Flux.BatchView(Flux.shuffleobs(Dataset(split=:test )), batchsize=mbs)
 
