@@ -1,4 +1,9 @@
 import torch
+from torch.profiler import profile, record_function, ProfilerActivity
+import GPUtil
+from torch.utils.tensorboard import SummaryWriter
+
+
 import matplotlib.pyplot as plt
 import numpy as np
 import torchvision
@@ -91,8 +96,6 @@ def my_init(scale):
                 m.bias.data.mul_(scale)
     return my_scaled_init
 
-
-         
 
         
 # Multi-Layer Perceptron
@@ -526,40 +529,80 @@ class CNN_Analytical(P_CNN):
     def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=hard_sigmoid, softmax=False):
         super(CNN_Analytical, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, activation=hard_sigmoid, softmax=False)
 
-        self.syn_transpose = []
+
+        # define transposes of each layer to send spikes backwards
+        self.syn_transpose = torch.nn.ModuleList()
         for idx in range(len(self.synapses)):
             layer = self.synapses[idx]
             if isinstance(layer, torch.nn.Conv2d):
                 transpose = torch.nn.ConvTranspose2d(layer.out_channels, layer.in_channels, layer.kernel_size, stride=layer.stride,
-                                        padding=layer.padding, dilation=layer.dilation)
+                                        padding=layer.padding, dilation=layer.dilation, bias=False)
                 transpose.weight.data = layer.weight.data
-                transpose.bias.data = torch.zeros_like(tranpose.bias.data)
+                # transpose.bias.data = torch.zeros_like(transpose.bias.data)
             elif isinstance(layer, torch.nn.Linear):
                 transpose = torch.nn.Linear(layer.out_features, layer.in_features, bias=False)
                 transpose.weight.data = layer.weight.data.T
             self.syn_transpose.append(transpose)
+        self.unpools = []
+        for idx in range(len(self.pools)):
+            self.pools[idx].return_indices = True # we will need the index information to unpool
+            pool = self.pools[idx]
+            if isinstance(pool, torch.nn.MaxPool2d):
+                self.unpools.append(torch.nn.MaxUnpool2d(pool.kernel_size, stride=pool.stride)) 
+            elif isinstance(pool, torch.nn.AvgPool2d):
+                avgunpool = torch.nn.ConvTranspose2d(1, 1, pool.kernel_size, stride=pool.stride, padding=0, dilation=0, bias=False)
+                avgunpool.weight.fill_(1/pool.kernel_size**2)
+                self.unpools.append(avgunpool)
 
     def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
-        x = x.view(x.size(0),-1) # flattening the input
+        mbs = x.size(0)
         layers = [x] + neurons 
         dn = [] # tendency of neurons
-        for idx in range(1, len(layers)): # exclude input layer
-            dn.append(torch.zeros_like(layers[idx]))
+        poolidxs = [[] for i in range(len(self.pools))]
+        for n in neurons: # exclude input layer
+            dn.append(torch.zeros_like(n, device=n.device))
 
         with torch.no_grad():
             for t in range(T):
-                for idx in range(1, len(layers)-1):
-                    dn[idx-1] = self.synapses[idx-1](layers[idx-1]) # input from previous layer
-                    dn[idx-1] += self.syn_transpose[idx](layers[idx+1]) # input from next layer
-                nudge = beta * (F.one_hot(y, num_classes=self.nc) - layers[-1]) # is grad(MSE(y, pred)) w/r to neurons
-                dn[-1] = self.synapses[-1](layers[-2]) + nudge 
+                # forwards connections (input from previous layer)
+                for idx in range(0, len(self.kernels)):
+                    dn[idx], poolidxs[idx] = self.pools[idx](self.synapses[idx](layers[idx]))
+                for idx in range(len(self.kernels), len(self.synapses)):
+                    dn[idx] = self.synapses[idx](layers[idx].view(mbs,-1))
+                # print([torch.isnan(dni).any() for dni in dn])
+                # print('^^^^^ post forwards')
+                
+                # backwards connections (input from following layer)
+                for idx in range(0, len(self.kernels)-1):
+                    dn[idx] += self.syn_transpose[idx+1](self.unpools[idx+1](layers[idx+2], poolidxs[idx+1]))
+                for idx in range(len(self.kernels)-1, len(self.synapses)-1):
+                    dn[idx] += self.syn_transpose[idx+1](layers[idx+2]).view(dn[idx].size())
+                # nudge and final layer
+                if criterion.__class__.__name__.find('MSE')!=-1:
+                    nudge = beta * 2 * (F.one_hot(y, num_classes=self.nc) - layers[-1]) # is grad(MSE(y, pred)) w/r to neurons
+                elif criterion.__class__.__name__.find('CrossEntropy')!=-1:
+                    nudge = beta * F.one_hot(y, num_classes=self.nc) / (layers[-1] + 1e-3) # gradient of cross entropy y*log(yhat)
+                dn[-1] += nudge # final layer only has input from previous and nudge
+                # update neurons by tendencies
                 for idx in range(len(dn)):
                     dn[idx] -= layers[idx+1] # exponential decay 
                     layers[idx+1] = self.activation(layers[idx+1] + dn[idx])
+                # print('l', layers[-1])
         
         return layers[1:] # neurons (layers excluding input)
+        x = x.view(x.size(0),-1) # flattening the input
 
+    def updatetranspose(self):
+        for idx in range(len(self.synapses)):
+            layer = self.synapses[idx]
+            transpose = self.syn_transpose[idx]
+            if isinstance(layer, torch.nn.Conv2d):
+                transpose.weight.data = layer.weight.data
+                # transpose.bias.data = torch.zeros_like(tranpose.bias.data)
+            elif isinstance(layer, torch.nn.Linear):
+                transpose.weight.data = layer.weight.data.T
 
+        
 
  
 # Vector Field Convolutional Neural Network
@@ -997,24 +1040,26 @@ def debug(model, prev_p, optimizer):
 
 
 
-def updatetranspose(model):
-    if model.__class__.__name__ == 'fake_softmax_CNN':
-        model.set_lateral()
-    elif model.__class__.__name__ == 'CNN_Analytical':
-        for idx in range(len(self.synapses)):
-            layer = self.synapses[idx]
-            transpose = self.syn_transpose[idx]
-            if isinstance(layer, torch.nn.Conv2d):
-                transpose.weight.data = layer.weight.data
-                # transpose.bias.data = torch.zeros_like(tranpose.bias.data)
-            elif isinstance(layer, torch.nn.Linear):
-                transpose.weight.data = layer.weight.data.T
-
+# helper function to show an image
+# from the pytorch documentation
+def matplotlib_imshow(img, one_channel=False):
+    if one_channel:
+        img = img.mean(dim=0)
+    img = img / 2 + 0.5     # unnormalize
+    npimg = img.numpy()
+    if one_channel:
+        plt.imshow(npimg, cmap="Greys")
+    else:
+        plt.imshow(np.transpose(npimg, (1, 2, 0)))
 
         
 def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs, criterion, alg='EP', 
-          random_sign=False, save=False, check_thm=False, path='', checkpoint=None, thirdphase = False, scheduler=None, cep_debug=False):
+          random_sign=False, save=False, check_thm=False, path='', checkpoint=None, thirdphase = False, scheduler=None, cep_debug=False, tensorboard=False):
     
+    if tensorboard:
+        tb_write_freq = 10 # every 10th of an epoch update tensorboard
+        writer = SummaryWriter('runs/{}/{}/{}'.format(alg, model.__class__.__name__, path))
+
     mbs = train_loader.batch_size
     start = time.time()
     iter_per_epochs = math.ceil(len(train_loader.dataset)/mbs)
@@ -1033,17 +1078,57 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
         epoch_sofar = checkpoint['epoch']
         angles = checkpoint['angles'] if 'angles' in checkpoint.keys() else []
 
+    x, y = next(iter(train_loader))
+    x = x.to(device)
+    y = y.to(device)
+
+    """
+    with profile(activities=[
+            ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True, with_stack=True, record_shapes=True) as prof:
+        with record_function("init_neurons"):
+            neurons = model.init_neurons(x.size(0), device)
+        with record_function("model_inference"):
+            model(x, y, neurons, 10, beta=beta_1, criterion=criterion)
+        neurons_1 = copy(neurons)
+        model(x, y, neurons, 10, beta=beta_2, criterion=criterion)
+        neurons_2 = copy(neurons)
+        with record_function("synapse_update"):
+            model.compute_syn_grads(x, y, neurons_1, neurons_2, betas, criterion)
+
+    prof.export_chrome_trace("trace-{}.json".format(model.__class__))
+
+    print(prof.key_averages(group_by_stack_n=5).table(sort_by="cuda_memory_usage", row_limit=10)) 
+
+    GPUtil.showUtilization(all=True)
+    """
+    # for reconstruction only, select random portion of input to clamp
+    reconstruct = model.__class__.__name__.find('Rev') != -1
+    masktransform = torchvision.transforms.Compose([
+                                      torchvision.transforms.RandomCrop(size=model.in_size, padding=model.in_size//2, padding_mode='constant'),
+                                  ])
+
     for epoch in range(epochs):
         run_correct = 0
         run_total = 0
         model.train()
 
+        if hasattr(model, 'lat_syn'):
+            print('lat weight norms', [l.weight.norm(1) for l in model.lat_syn])
+            print(model.lat_syn[-1].weight[0:10,0:10])
+
         for idx, (x, y) in enumerate(train_loader):
             x, y = x.to(device), y.to(device)
+            mbs = x.size(0)
             #if alg=='CEP' and cep_debug:
             #    x = x.double()            
     
-            neurons = model.init_neurons(x.size(0), device)
+            neurons = model.init_neurons(mbs, device)
+            if reconstruct:
+                # results in a zero and one mask used to select which indexes of the input to fully clamp.
+                # The zeros (the padding included in the randomcrop) are where it will reconstruct the output
+                reconstructmask = masktransform(torch.ones_like(x)).bool()
+                model.fullclamping[0] = reconstructmask
+
             if alg=='EP' or alg=='CEP':
                 # First phase
                 neurons = model(x, y, neurons, T1, beta=beta_1, criterion=criterion)
@@ -1068,7 +1153,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     pred = torch.argmax(F.softmax(model.synapses[-1](neurons[-1].view(x.size(0),-1)), dim = 1), dim = 1).squeeze()
 
                 run_correct += (y == pred).sum().item()
-                run_total += x.size(0)
+                run_total += mbs # x.size(0)
                 if ((idx%(iter_per_epochs//10)==0) or (idx==iter_per_epochs-1)) and save:
                     plot_neural_activity(neurons, path)
             
@@ -1099,7 +1184,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     model.compute_syn_grads(x, y, neurons_1, neurons_2, betas, criterion)
 
                 optimizer.step()      
-                updatetranspose(model)
+                if hasattr(model, 'updatetranspose'):
+                    model.updatetranspose()
 
             elif alg=='CEP':
                 if random_sign and (beta_1==0.0):
@@ -1159,19 +1245,45 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                         
             if ((idx%(iter_per_epochs//10)==0) or (idx==iter_per_epochs-1)):
                 run_acc = run_correct/run_total
+                if reconstruct:
+                    run_acc = (- (x - neurons[0]).norm(2)).data.item()
                 print('Epoch :', round(epoch_sofar+epoch+(idx/iter_per_epochs), 2),
                       '\tRun train acc :', round(run_acc,3),'\t('+str(run_correct)+'/'+str(run_total)+')\t',
                       timeSince(start, ((idx+1)+epoch*iter_per_epochs)/(epochs*iter_per_epochs)))
-                print('L1, L10 : ', torch.norm(neurons_1[-1], 1, dim=1).sum().data/mbs, torch.norm(neurons_1[-1], 10, dim=1).sum().data/mbs)
                 if isinstance(model, VF_CNN): 
                     angle = model.angle()
                     print('angles ',angle)
                 if check_thm and alg!='BPTT':
                     BPTT, EP = check_gdu(model, x[0:5,:], y[0:5], T1, T2, betas, criterion, alg=alg)
                     RMSE(BPTT, EP)
-        if model.__class__.__name__ == 'fake_softmax_CNN':
-            print('lateral inhibition : ', model.lat_syn.weight.data[0,1])
-        print('sample predictions : \n', torch.round(neurons_1[-1][1:10].data*100), '\n labels : ', y[1:10].data)
+            
+            if tensorboard:
+                if ((idx%(iter_per_epochs//tb_write_freq)==0) or (idx==iter_per_epochs-1)):
+                    im = lambda t: (t*255).to(torch.uint8)
+                    img_grid = torchvision.utils.make_grid(im(x.data.cpu()[:16]))
+                    # matplotlib_imshow(img_grid, one_channel=True)
+                    writer.add_image('original input', img_grid, epoch*iter_per_epochs+idx)
+
+                    if hasattr(model, 'fullclamping'):
+                        img_grid = torchvision.utils.make_grid(im((x*model.fullclamping[0])[:16].data.cpu()))
+                        # matplotlib_imshow(img_grid, one_channel=True)
+                        writer.add_image('clamped input', img_grid, epoch*iter_per_epochs+idx)
+
+                        img_grid = torchvision.utils.make_grid(im(neurons_1[0][:16].data.cpu()))
+                        # matplotlib_imshow(img_grid, one_channel=True)
+                        writer.add_image('completed input layer', img_grid, epoch*iter_per_epochs+idx)
+                    
+                        img_grid = torchvision.utils.make_grid(im(neurons_2[0][:16].data.cpu()))
+                        # matplotlib_imshow(img_grid, one_channel=True)
+                        writer.add_image('nudged input layer', img_grid, epoch*iter_per_epochs+idx)
+
+                    # writer.add_graph(model, (x, y, neurons, 10))
+                    run_acc = run_correct/run_total
+                    if reconstruct:
+                        run_acc = (- (x - neurons[0]).norm(2)).data.item()
+
+                    writer.add_scalars(model.__class__.__name__, {'train_acc': run_acc,}, epoch*iter_per_epochs+idx)
+                    writer.close()
 
         if scheduler is not None: # learning rate decay step
             if epoch+epoch_sofar < scheduler.T_max:
@@ -1179,6 +1291,11 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
 
         test_correct = evaluate(model, test_loader, T1, device)
         test_acc_t = test_correct/(len(test_loader.dataset))
+        if reconstruct:
+            test_acc_t = (- (x - neurons[0]).norm(2)).data.item()
+        if tensorboard:
+            writer.add_scalars(model.__class__.__name__, {'test_acc': test_acc_t,}, idx+epoch*iter_per_epochs)
+            writer.close()
         if save:
             test_acc.append(100*test_acc_t)
             train_acc.append(100*run_acc)
@@ -1225,7 +1342,11 @@ def evaluate(model, loader, T, device):
 
         correct += (y == pred).sum().item()
 
+
     acc = correct/len(loader.dataset) 
+    reconstruct = model.__class__.__name__.find('Rev') != -1
+    if reconstruct:
+        acc = (- (x - neurons[0]).norm(2)).data.item()
     print(phase+' accuracy :\t', acc)   
     return correct
 

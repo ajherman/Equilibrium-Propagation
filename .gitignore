@@ -1,4 +1,6 @@
 # *.txt
+*.json
+runs/
 results/**/*.pt
 results/**/*.tar
 results/**/*.jld2

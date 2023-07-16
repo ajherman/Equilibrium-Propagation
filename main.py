@@ -19,6 +19,8 @@ from data_utils import *
 
 from lateral_models import *
 
+from hopfield_models import *
+
 parser = argparse.ArgumentParser(description='Eqprop')
 parser.add_argument('--model',type = str, default = 'MLP', metavar = 'm', help='model')
 parser.add_argument('--task',type = str, default = 'MNIST', metavar = 't', help='task')
@@ -60,11 +62,17 @@ parser.add_argument('--cep-debug', default = False, action = 'store_true', help=
 
 
 parser.add_argument('--use-lateral', default = False, action = 'store_true', help='whether to enable the lateral/hopfield interactions (default: False)')
+parser.add_argument('--lat-layers', nargs='+', type = int, default = [], help='index of layers to add lateral connections to (ex: 0 1 -1) to add lateral interactions to first and second layer, last layer')
 parser.add_argument('--lat-init-zeros', default = False, action = 'store_true', help='whether to initialze the lateral/hopfield interactions with zeros (default: False)')
 parser.add_argument('--lat-lrs', nargs='+', type = float, default = [], metavar = 'l', help='lateral connection set wise lr')
 parser.add_argument('--head-lrs', nargs='+', type = float, default = [], metavar = 'l', help='(multi-head CNN) head-encoder-layer wise lr')
 parser.add_argument('--lat-wds', nargs='+', type = float, default = None, metavar = 'l', help='lateral connection set weight decays')
 parser.add_argument('--save-nrn', default = False, action = 'store_true', help='not sure what this is supposed to be for. it was in the check/*.sh, but not in main.py so it originally errored.')
+
+parser.add_argument('--load-path-convert', type = str, default = '', metavar = 'l', help='load a model and copy its parameters to the specified architecture (initialize new layers at identity)')
+parser.add_argument('--convert-place-layers', nargs='+', type = int, default = [], help='index of layers to convert from loaded model (indexes not specified should be linear layers and architecture should match original at given indexes)')
+
+parser.add_argument('--tensorboard', default = False, action = 'store_true', help='write data to tensorboard for viewing while training')
 
 args = parser.parse_args()
 command_line = ' '.join(sys.argv)
@@ -146,7 +154,6 @@ elif args.task=='CIFAR10':
 
 
 
-
 if args.act=='mysig':
     activation = my_sigmoid
 elif args.act=='sigmoid':
@@ -183,53 +190,85 @@ if args.load_path=='':
         model = Lat_P_MLP(args.archi, activation=activation)
     elif args.model.find('CNN')!=-1:
 
+        pools = make_pools(args.pools)
         if args.task=='MNIST':
-            pools = make_pools(args.pools)
             channels = [1]+args.channels 
-            if args.model=='CNN':
-                model = P_CNN(28, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
-                                  activation=activation, softmax=args.softmax)
-            elif args.model=='VFCNN':
-                model = VF_CNN(28, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
-                                   activation=activation, softmax=args.softmax, same_update=args.same_update)
-            elif args.model=='Lat_MH_CNN':
-                model = Lat_MH_CNN([50 for i in range(10)], 28, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
-                                    activation=activation, softmax=args.softmax, same_update=args.same_update)
-            elif args.model=='LatSoftCNN':
-                model = fake_softmax_CNN(28, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
-                                  activation=activation, softmax=False)
-
+            in_size = 28
         elif args.task=='CIFAR10':
-            pools = make_pools(args.pools)
             channels = [3]+args.channels
-            if args.model=='CNN':
-                model = P_CNN(32, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
-                              activation=activation, softmax=args.softmax)
-            elif args.model=='VFCNN':
-                model = VF_CNN(32, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
-                              activation=activation, softmax = args.softmax, same_update=args.same_update)
-            elif args.model=='Lat_MH_CNN':
-                model = Lat_MH_CNN([50 for i in range(10)], 32, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
-                                    activation=activation, softmax=args.softmax)
-        
+            in_size = 32
         elif args.task=='imagenet':   #only for gducheck
             pools = make_pools(args.pools)
             channels = [3]+args.channels 
             model = P_CNN(224, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                             activation=activation, softmax=args.softmax)
+            
+        if args.model=='CNN':
+            model = P_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
+                              activation=activation, softmax=args.softmax)
+        elif args.model=='VFCNN':
+            model = VF_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
+                               activation=activation, softmax=args.softmax, same_update=args.same_update)
+        elif args.model=='Lat_MH_CNN':
+            model = Lat_MH_CNN([50 for i in range(10)], in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
+                                activation=activation, softmax=args.softmax, same_update=args.same_update)
+        elif args.model=='LatSoftCNN':
+            model = fake_softmax_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
+                              activation=activation, softmax=False)
+        elif args.model=='ReversibleCNN':
+            model = Reversible_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
+                              activation=activation, softmax=args.softmax)
+        elif args.model=="LateralCNN":
+            model = lat_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
+                            args.lat_layers,
+                          activation=activation, softmax=args.softmax)
+        elif args.model=="RevLatCNN":
+            model = RevLatCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
+                            args.lat_layers,
+                          activation=activation, softmax=args.softmax)
+
                        
         print('\n')
         print('Poolings =', model.pools)
 
     if args.scale is not None:
         model.apply(my_init(args.scale))
-        if not(args.use_lateral) or args.lat_init_zeros:
-            if args.model=='LatMLP':
-                model.lat_syn.apply(torch.nn.init.zeros_)
-            elif args.model == 'Lat_MH_CNN':
-                model.head_hopfield.apply(torch.nn.init.zero_)
 else:
     model = torch.load(args.load_path + '/model.pt', map_location=device)
+
+if args.load_path_convert != '':
+    # initialize new weights as identity
+    def my_convert_init(m): # initialize new layers as identity, so model functions like original model
+        if isinstance(m, torch.nn.Linear):
+            m.weight.data.copy_(torch.eye(m.weight.size(0), m.weight.size(1)))
+            if m.bias is not None:
+                m.bias.data.zero_()
+    model.synapses.apply(my_convert_init)
+    
+    # load source model
+    origmodel = torch.load(args.load_path_convert + '/model.pt', map_location=device)
+    # copy parameters
+    if len(args.convert_place_layers) == 0:
+        args.convert_place_layers = range(len(origmodel.synapses))
+    for i, idx in enumerate(args.convert_place_layers):
+        model.synapses[idx] = origmodel.synapses[i]
+    #if origmodel.hasattr('lat_syn'):
+    #    model.lat_syn[args.convert_place_lat_layers] = origmodel.lay_syn
+
+    # modify lateral or tranposed layers if necessary based on sourced weights
+    if hasattr(model, 'updatetranspose'):
+        model.updatetranspose()
+
+
+if not(args.use_lateral) or args.lat_init_zeros:
+    print("zeroing lateral layer")
+    if hasattr(model, 'lat_syn'):
+        for l in model.lat_syn:
+            l.weight.data = l.weight.data.zero_()
+            if hasattr(l, 'bias'):
+                l.bias.data = l.bias.data.zero_()
+    elif args.model == 'Lat_MH_CNN':
+        model.head_hopfield.apply(torch.nn.init.zeros_)
 
 model.to(device)
 print(model)
@@ -264,12 +303,12 @@ if args.todo=='train':
             else:
                 optim_params.append( {'params': model.head_encoders[idx].parameters(), 'lr': args.head_lrs[idx], 'weight_decay': args.head_wds[idx+1]} )
     if args.use_lateral:
-        # if hasattr(model, 'lat_syn'):
-        #     for idx in range(len(model.lat_syn)):
-        #         if args.wds is None:
-        #             optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lat_lrs[idx]} )
-        #         else:
-        #             optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lat_lrs[idx], 'weight_decay': args.lat_wds[idx]} )
+        if hasattr(model, 'lat_syn'):
+            for idx in range(len(model.lat_syn)):
+                if args.wds is None:
+                    optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lat_lrs[idx]} )
+                else:
+                    optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lat_lrs[idx], 'weight_decay': args.lat_wds[idx]} )
         if hasattr(model, 'head_hopfield'):
             for idx in range(len(model.head_hopfield)):
                 if args.wds is None:
@@ -306,7 +345,7 @@ if args.todo=='train':
 
     train(model, optimizer, train_loader, test_loader, args.T1, args.T2, betas, device, args.epochs, criterion, alg=args.alg, 
                  random_sign=args.random_sign, check_thm=args.check_thm, save=args.save, path=path, checkpoint=checkpoint, 
-                 thirdphase=args.thirdphase, scheduler=scheduler, cep_debug=args.cep_debug)
+                 thirdphase=args.thirdphase, scheduler=scheduler, cep_debug=args.cep_debug, tensorboard=args.tensorboard)
 
 
 elif args.todo=='gducheck':
