@@ -589,7 +589,7 @@ class CNN_Analytical(P_CNN):
         
         return layers[1:] # neurons (layers excluding input)
 
-    def updatetranspose(self):
+    def postupdate(self):
         for idx in range(len(self.synapses)):
             layer = self.synapses[idx]
             transpose = self.syn_transpose[idx]
@@ -1111,8 +1111,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
         recon_err = 0
         model.train()
 
-        if hasattr(model, 'updatetranspose'):
-            model.updatetranspose()
+        if hasattr(model, 'postupdate'):
+            model.postupdate()
         if hasattr(model, 'lat_syn'):
             print('lat weight norms', [l.weight.norm(1) for l in model.lat_syn])
             print(model.lat_syn[-1].weight[0:10,0:10])
@@ -1202,8 +1202,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     model.compute_syn_grads(x, y, neurons_1, neurons_2, betas, criterion)
 
                 optimizer.step()      
-                if hasattr(model, 'updatetranspose'):
-                    model.updatetranspose()
+                if hasattr(model, 'postupdate'):
+                    model.postupdate()
 
             elif alg=='CEP':
                 if random_sign and (beta_1==0.0):

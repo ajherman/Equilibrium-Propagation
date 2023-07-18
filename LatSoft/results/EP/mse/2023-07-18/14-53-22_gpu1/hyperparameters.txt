@@ -1,4 +1,4 @@
-../main.py --task MNIST --model LatSoftCNN --channels 32 64 --kernels 3 3 --strides 1 1 --paddings 0 1 --pools mm --fc 10 --inhibitstrength 1.0 --loss mse --optim adam --lrs 5e-5 4e-5 6e-5 --epochs 5 --act mysig --todo train --betas 0.0 0.01 --T1 100 --T2 10 --mbs 100 --thirdphase --save --device 1 --tensorboard 
+../main.py --task MNIST --model LatSoftCNN --channels 32 64 --kernels 3 3 --strides 1 1 --paddings 0 1 --pools mm --fc 10 --inhibitstrength 1.0 --competitiontype feature_inner_products --loss mse --optim adam --lrs 5e-5 4e-5 6e-5 --epochs 5 --act mysig --todo train --betas 0.0 0.01 --T1 100 --T2 10 --mbs 100 --thirdphase --save --device 1 --tensorboard 
 
 - task: MNIST
 - data augmentation (if CIFAR10): False

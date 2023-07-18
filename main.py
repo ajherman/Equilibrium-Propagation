@@ -63,11 +63,13 @@ parser.add_argument('--cep-debug', default = False, action = 'store_true', help=
 
 parser.add_argument('--train-lateral', default = False, action = 'store_true', help='whether to enable the lateral/hopfield interactions (default: False)')
 parser.add_argument('--lat-layers', nargs='+', type = int, default = [], help='index of layers to add lateral connections to (ex: 0 1 -1) to add lateral interactions to first and second layer, last layer')
+parser.add_argument('--lat-constraints', nargs='+', type = str, default = [], metavar = 'lc', help='constraints to impose to lateral connections (layer-wise). e.g. `--lat-constraints zerodiag transposesymmetric+negReLu none` to zero the diagonal (self-interactions) of the first lateral layer in the model, and ensure the second layer is a symmetric matrix with only negative values (this combines two possible constraints).')
+parser.add_argument('--competitiontype', type = str, default = 'none', metavar = 'ct', help='(LatSoftCNN) type of lateral inhibition to apply in output classification layer (feature_inner_products or uniform_inhbition). will be scaled by --inhibitstrength')
+parser.add_argument('--inhibitstrength',type = float, default = 0.0, metavar = 'inhibitstrength', help='(LatSoftCNN) coeffecient on WTA inhibitory connection in output layer (mimicing softmax)')
 parser.add_argument('--lat-init-zeros', default = False, action = 'store_true', help='whether to initialze the lateral/hopfield interactions with zeros (default: False)')
 parser.add_argument('--lat-lrs', nargs='+', type = float, default = [], metavar = 'l', help='lateral connection set wise lr')
 parser.add_argument('--head-lrs', nargs='+', type = float, default = [], metavar = 'hl', help='(multi-head CNN) head-encoder-layer wise lr')
 parser.add_argument('--lat-wds', nargs='+', type = float, default = None, metavar = 'l', help='lateral connection set weight decays')
-parser.add_argument('--inhibitstrength',type = float, default = 0.0, metavar = 'inhibitstrength', help='coeffecient on WTA inhibitory connection in output layer (mimicing softmax)')
 
 parser.add_argument('--save-nrn', default = False, action = 'store_true', help='not sure what this is supposed to be for. it was in the check/*.sh, but not in main.py so it originally errored.')
 
@@ -216,13 +218,14 @@ if args.load_path=='':
                                 activation=activation, softmax=args.softmax, same_update=args.same_update)
         elif args.model=='LatSoftCNN':
             model = fake_softmax_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
-                              activation=activation, inhibitstrength=args.inhibitstrength, softmax=False)
+                              activation=activation, competitiontype=args.competitiontype, lat_constraints=args.lat_constraints, 
+                              inhibitstrength=args.inhibitstrength, softmax=False)
         elif args.model=='ReversibleCNN':
             model = Reversible_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                               activation=activation, softmax=args.softmax)
         elif args.model=="LateralCNN":
             model = lat_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
-                            args.lat_layers,
+                            args.lat_layers, lat_constraints=args.lat_constraints,
                           activation=activation, softmax=args.softmax)
         elif args.model=="RevLatCNN":
             model = RevLatCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,

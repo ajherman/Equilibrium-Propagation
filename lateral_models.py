@@ -260,11 +260,12 @@ class Lat_MH_CNN(P_CNN):
         
 
 class lat_CNN(P_CNN):
-    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, activation=hard_sigmoid, softmax=False):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=hard_sigmoid, softmax=False):
         # initialize default P_CNN structure, without the final fully connected layer (pass in the last layer to store proper output size)
         
         super(lat_CNN, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax) 
 
+        self.lat_constraints = lat_constraints
         self.lat_layer_idxs = lat_layer_idxs
         for i in range(len(self.lat_layer_idxs)):
             while self.lat_layer_idxs[i] <= 0:
@@ -293,45 +294,15 @@ class lat_CNN(P_CNN):
             if layeridx + idx in self.lat_layer_idxs:
                 self.lat_syn.append(torch.nn.Linear(fc_layers[idx+1], fc_layers[idx+1], bias=True))
 
-        # self.lat_layer_idxs += 1 # in phi calculation, layers offset by input layer
-        # self.set_lateral()
-
-    #     # define transposes of each layer to send spikes backwards
-    #     self.syn_transpose = torch.nn.ModuleList()
-    #     for idx in range(len(self.synapses)):
-    #         layer = self.synapses[idx]
-    #         if isinstance(layer, torch.nn.Conv2d):
-    #             transpose = torch.nn.ConvTranspose2d(layer.out_channels, layer.in_channels, layer.kernel_size, stride=layer.stride,
-    #                                     padding=layer.padding, dilation=layer.dilation, bias=False)
-    #             transpose.weight.data = layer.weight.data
-    #             # transpose.bias.data = torch.zeros_like(transpose.bias.data)
-    #         elif isinstance(layer, torch.nn.Linear):
-    #             transpose = torch.nn.Linear(layer.out_features, layer.in_features, bias=False)
-    #             transpose.weight.data = layer.weight.data.T
-    #         self.syn_transpose.append(transpose)
-    #     self.unpools = []
-    #     for idx in range(len(self.pools)):
-    #         self.pools[idx].return_indices = True # we will need the index information to unpool
-    #         pool = self.pools[idx]
-    #         if isinstance(pool, torch.nn.MaxPool2d):
-    #             self.unpools.append(torch.nn.MaxUnpool2d(pool.kernel_size, stride=pool.stride)) 
-    #         elif isinstance(pool, torch.nn.AvgPool2d):
-    #             avgunpool = torch.nn.ConvTranspose2d(1, 1, pool.kernel_size, stride=pool.stride, padding=0, dilation=0, bias=False)
-    #             avgunpool.weight.fill_(1/pool.kernel_size**2)
-    #             self.unpools.append(avgunpool)
-           
-        # for syn in [*self.synapses, *self.lat_syn, *self.syn_transpose]:
-        #     print(syn.weight)
-
-    # def set_lateral(self):
-    #     # force lateral connections to be symmetric (backwards and forward weights the same)
-    #     # and set them based on the inputs to the last layer, so they are always more inhibitory than the input can overcome
-    #     with torch.no_grad():
-    #         inhibitstrength = 1 #F.relu(self.synapses[-1].weight.data).sum()/1000 # average maximum activation (previous layer is fully active where weights are positive)
-    #         # this strength should be enough to completely kill all logits except one winner
-    #         self.lat_syn[0].weight.fill_(-inhibitstrength)
-    #         self.lat_syn[0].weight -= torch.diag(torch.diag(self.lat_syn[0].weight)) # zero the diagonal (self-connection)
-    #         self.lat_syn[0].bias.fill_(0.1)
+    def postupdate(self):
+        for i, constraint in enumerate(self.lat_constraints):
+            if 'zerodiag' in constraint:
+                # zero diagonal to remove self-interaction
+                self.lat_syn[i].weight.data -= torch.diag(torch.diag(self.lat_syn[i].weight.data))
+            if 'transposesymmetric' in constraint:
+                self.lat_syn[i].weight.data = 0.5*(self.lat_syn.weight.data.T + self.lat_syn.weight.data)
+            if 'negReLu':
+                self.lat_syn[i].weight.data = -F.relu(-self.lat_syn[i].weight.data)
 
     def Phi(self, x, y, neurons, beta, criterion, use_lat=False):
 
@@ -378,46 +349,6 @@ class lat_CNN(P_CNN):
         return phi
     
     def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
-        # mbs = x.size(0)
-        # layers = [x] + neurons 
-        # dn = [] # tendency of neurons
-        # poolidxs = [[] for i in range(len(self.pools))]
-        # for n in neurons: # exclude input layer
-        #     dn.append(torch.zeros_like(n, device=n.device))
-
-        # with torch.no_grad():
-        #     for t in range(T):
-        #         # forwards connections (input from previous layer)
-        #         for idx in range(0, len(self.kernels)):
-        #             dn[idx], poolidxs[idx] = self.pools[idx](self.synapses[idx](layers[idx]))
-        #         for idx in range(len(self.kernels), len(self.synapses)):
-        #             dn[idx] = self.synapses[idx](layers[idx].view(mbs,-1))
-        #         # print([torch.isnan(dni).any() for dni in dn])
-        #         # print('^^^^^ post forwards')
-        #         
-        #         # backwards connections (input from following layer)
-        #         for idx in range(0, len(self.kernels)-1):
-        #             dn[idx] += self.syn_transpose[idx+1](self.unpools[idx+1](layers[idx+2], poolidxs[idx+1]))
-        #         for idx in range(len(self.kernels)-1, len(self.synapses)-1):
-        #             dn[idx] += self.syn_transpose[idx+1](layers[idx+2]).view(dn[idx].size())
-        #         # nudge and final layer
-        #         if criterion.__class__.__name__.find('MSE')!=-1:
-        #             nudge = beta * 2 * (F.one_hot(y, num_classes=self.nc) - layers[-1]) # is grad(MSE(y, pred)) w/r to neurons
-        #         elif criterion.__class__.__name__.find('CrossEntropy')!=-1:
-        #             nudge = beta * F.one_hot(y, num_classes=self.nc) / (layers[-1] + 1e-3) # gradient of cross entropy y*log(yhat)
-        #         dn[-1] += nudge # final layer only has input from previous and nudge
-        #         # lateral connections in output layer
-        #         dn[-1] += self.lat_syn[0](layers[-1])
-        #         # update neurons by tendencies
-        #         for idx in range(len(dn)):
-        #             dn[idx] -= layers[idx+1] # exponential decay 
-        #             layers[idx+1] = self.activation(layers[idx+1] + dn[idx])
-        #         # print('l', layers[-1])
-        # 
-        # return layers[1:] # neurons (layers excluding input)
-
-
- 
         not_mse = (criterion.__class__.__name__.find('MSE')==-1)
         mbs = x.size(0)
         device = x.device     
@@ -504,20 +435,28 @@ class lat_CNN(P_CNN):
 
 # lateral-connectivity on logit/classification output layer to produce softmax-like behaviour CNN
 class fake_softmax_CNN(lat_CNN):
-    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, activation=hard_sigmoid, softmax=False):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_constraints, activation=hard_sigmoid, softmax=False):
         lat_layer_idxs = [-1] # lateral connections in final layer only
         softmax=False
         self.inhibitstrength = inhibitstrength 
-        super(fake_softmax_CNN, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, activation=activation, softmax=softmax)
+        self.competitiontype = competitiontype
+        super(fake_softmax_CNN, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=activation, softmax=softmax)
         for l in self.lat_syn:
             l.weight.requires_grad = False
-    def updatetranspose(self):
-        # LCA-like sparse coding lateral inhibition based on inner product of features (rows of weight of last layer)
-        features = self.synapses[-1].weight.data
-        for rowidx in range(self.nc):
-            self.lat_syn[-1].weight[rowidx,:] = - self.inhibitstrength * (features * features[rowidx,:]).sum(dim=1)
+        
 
-        self.lat_syn[-1].weight.data -= torch.diag(torch.diag(self.lat_syn[-1].weight.data))
+    def postupdate(self):
+        if self.competitiontype == 'feature_inner_products':
+            # LCA-like sparse coding lateral inhibition based on inner product of features (rows of weight of last layer)
+            features = self.synapses[-1].weight.data
+            for rowidx in range(self.nc):
+                self.lat_syn[-1].weight[rowidx,:] = - self.inhibitstrength * (features * features[rowidx,:]).sum(dim=1)
+        elif self.competitiontype == 'uniform_inhibition':
+            self.lat_syn[-1].weight.fill_(-self.inhibitstrength)
+        else:
+            print('UNKNOW VALUE {} for competition_type!!'.format(self.competitiontype))
+
+        super(fake_softmax_CNN, self).postupdate()
 
 
 
