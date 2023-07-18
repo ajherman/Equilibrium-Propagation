@@ -9,6 +9,14 @@ class Reversible_CNN(P_CNN):
         for idx in range(len(self.synapses)+1):
             self.fullclamping.append(torch.tensor([]))
 
+        self.mode(trainclassifier=True, trainreconstruct=False)
+
+        self.reconcriterion = torch.nn.MSELoss(reduction = 'none')
+
+    def mode(self, trainclassifier=True, trainreconstruct=False):
+        self.trainclassifier = trainclassifier
+        self.trainreconstruct = trainreconstruct
+
     def Phi(self, targetneurons, neurons, betas, fullclamping, criterion):
 
         mbs = neurons[0].size(0)
@@ -30,16 +38,19 @@ class Reversible_CNN(P_CNN):
             for idx in range(conv_len, tot_len-1):
                 phi += torch.sum( self.synapses[idx](neurons[idx].view(mbs,-1)) * neurons[idx+1], dim=1).squeeze()
              
-        for idx in range(len(neurons)):
+        if targetneurons[0].size(0) > 0:
+            phi -= 0.5*(betas[0]*self.reconcriterion(neurons[0], targetneurons[0])).view(mbs,-1).sum(dim=1).squeeze() 
+        for idx in range(1,len(neurons)):
             if targetneurons[idx].size(0) > 0:
-                # if fullclamping[idx].size(0) >  0:
-                #     neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
-                phi -= betas[idx]*criterion(neurons[idx], targetneurons[idx]).sum().squeeze()             
+                if criterion.__class__.__name__.find('MSE')!=-1:
+                    L = 0.5*(betas[idx]*criterion(neurons[idx], targetneurons[idx])).view(mbs,-1).sum(dim=1).squeeze() 
+                else:
+                    L = (betas[idx]*criterion(neurons[idx], targetneurons[idx])).view(mbs,-1).sum(dim=1).squeeze() 
+                phi -= L    
 
         # for idx in range(len(neurons)):
         #     if fullclamping[idx].size(0) > 0:
         #         phi -= 0.2*neurons[idx][False == fullclamping[idx]].norm(1) # L1 penalty for lots of activation in reconstruction
-        
         return phi
     
     def xytotargetneurons(self, x, y):
@@ -47,41 +58,63 @@ class Reversible_CNN(P_CNN):
         for idx in range(len(self.targetneurons)):
             self.targetneurons[idx].zero_()
         self.targetneurons[0].copy_(x)
-        # self.targetneurons[-1].copy_(F.one_hot(y.to(torch.int64), num_classes=self.nc))
+        self.targetneurons[-1].copy_(F.one_hot(y.to(torch.int64), num_classes=self.nc))
 
         return self.targetneurons
+
+    def fieldbeta(self, beta):
+        for idx in range(len(self.betas)):
+            self.betas[idx].zero_()
+        # nudge on input for reconstruction of unclamped portion
+        if self.trainreconstruct:
+            self.betas[0].fill_(beta)
+        # nudge for classification
+        if self.trainclassifier:
+            self.betas[-1].fill_(beta)
+
+        return self.betas
 
     def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
  
         # not_mse = (criterion.__class__.__name__.find('MSE')==-1)
         mbs = x.size(0)
         device = x.device     
+
         
         self.targetneurons = self.xytotargetneurons(x, y)
-        for idx in range(len(self.betas)):
-            self.betas[idx].zero_()
-        self.betas[0].fill_(beta) # nudge on input for reconstruction of unclamped portion
-        self.betas[-1].fill_(0.0)#beta) # nudge strength
+        self.beta = self.fieldbeta(beta)
 
         return self.energymodel(self.targetneurons, neurons, T, self.betas, self.fullclamping, criterion, check_thm=check_thm)
 
     def energymodel(self, targetneurons, neurons, T, betas, fullclamping, criterion, check_thm=False):
+        not_mse = (criterion.__class__.__name__.find('MSE')==-1)
         mbs = neurons[0].size(0)
         device = neurons[0].device
+        neuronsout = []
+        for idx in range(len(neurons)):
+            neuronsout.append(torch.zeros_like(neurons[idx]))
+            neuronsout[idx].requires_grad = True
+        # apply full clamping
+        with torch.no_grad():
+            for idx in range(len(neurons)):
+                if fullclamping[idx].size(0) >  0:
+                    neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
+                neurons[idx].requires_grad = True
         for t in range(T):
             phi = self.Phi(targetneurons, neurons, betas, fullclamping, criterion)
-            # init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
-            # init_grads = torch.ones_like(self.initgradstensor)
             grads = torch.autograd.grad(phi, neurons, grad_outputs=self.initgradstensor, create_graph=check_thm)
 
-            for idx in range(len(neurons)-1):
+            for idx in range(0,len(neurons)-1):
                 neurons[idx] = self.activation( grads[idx] )
                 # if check_thm:
                 #   neurons[idx].retain_grad()
                 # else:
                 neurons[idx].requires_grad = True
          
-            neurons[-1] = self.activation( grads[-1] )
+            if not_mse and not(self.softmax):
+                neurons[-1] = grads[-1]
+            else:
+                neurons[-1] = self.activation( grads[-1] )
             # if chek_thm:
             #   neurons[-1].retain_grad()
             neurons[-1].requires_grad = True
@@ -92,6 +125,11 @@ class Reversible_CNN(P_CNN):
                     if fullclamping[idx].size(0) >  0:
                         neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
 
+            ## average the last n neurons in case its a limit cycle
+            #n = 3
+            #if T-t <= n:
+            #    for idx in range(len(neurons)):
+            #        neuronsout[idx] += neurons[idx]/n
 
         return neurons
        
@@ -136,43 +174,24 @@ class Reversible_CNN(P_CNN):
         return neurons
 
     def compute_syn_grads(self, x, y, neurons_1, neurons_2, beta1beta2, criterion, check_thm=False):
-        not_mse = (criterion.__class__.__name__.find('MSE')==-1)
-        mbs = x.size(0)
-        device = x.device     
-        
+        beta_1, beta_2 = beta1beta2
+
         self.targetneurons = self.xytotargetneurons(x, y)
 
-        self.betas2 = []
-        for idx in range(len(self.betas)):
-            self.betas2.append(torch.zeros_like(self.betas[idx]))
-            self.betas[idx].zero_()
-        # nudging for reconstructing the input
-        self.betas[0].fill_(beta1beta2[0])
-        self.betas2[0].fill_(beta1beta2[1])
-        # nudge for getting the right classification
-        self.betas[-1].fill_(0.0)#beta1beta2[0])
-        self.betas2[-1].fill_(0.0)#beta1beta2[1])
-        #betas1 = torch.zeros(len(neurons_1)).to(device)
-        #betas2 = torch.zeros(len(neurons_1)).to(device)
-        #betas1[0] = 1.0e9 # strong clamping on input
-        #betas1[-1] = beta1beta2[0] # nudge strength
-        #betas2[0] = 1.0e9 # strong clamping on input
-        #betas2[-1] = beta1beta2[1] # nudge strength
+        betas1 = copy(self.fieldbeta(beta_1))
+        betas2 = copy(self.fieldbeta(beta_2))
 
-        
-        # beta_1, beta_2 = betas
-        
         self.zero_grad()            # p.grad is zero
         if not(check_thm):
-            phi_1 = self.Phi(self.targetneurons, neurons_1, self.betas, self.fullclamping, criterion)
+            phi_1 = self.Phi(self.targetneurons, neurons_1, betas1, self.fullclamping, criterion)
         else:
-            phi_1 = self.Phi(self.targetneurons, neurons_1, self.betas2, self.fullclamping, criterion)
+            phi_1 = self.Phi(self.targetneurons, neurons_1, betas2, self.fullclamping, criterion)
         phi_1 = phi_1.mean()
         
-        phi_2 = self.Phi(self.targetneurons, neurons_2, self.betas2, self.fullclamping, criterion)
+        phi_2 = self.Phi(self.targetneurons, neurons_2, betas2, self.fullclamping, criterion)
         phi_2 = phi_2.mean()
-        
-        delta_phi = (phi_2 - phi_1)/(beta1beta2[0] - beta1beta2[1])        
+
+        delta_phi = (phi_2 - phi_1)/(beta_1 - beta_2)        
         delta_phi.backward() # p.grad = -(d_Phi_2/dp - d_Phi_1/dp)/(beta_2 - beta_1) ----> dL/dp  by the theorem
 
 
@@ -211,32 +230,32 @@ class RevLatCNN(Reversible_CNN):
 
 
     def Phi(self, targetneurons, neurons, betas, fullclamping, criterion):
-
+        phi = Reversible_CNN.Phi(self, targetneurons, neurons, betas, fullclamping, criterion)
         mbs = neurons[0].size(0)
-        conv_len = len(self.kernels)
-        tot_len = len(self.synapses)
+        #conv_len = len(self.kernels)
+        #tot_len = len(self.synapses)
 
-        #layers = [x] + neurons        
-        #layers = neurons
-        phi = 0.0
+        ##layers = [x] + neurons        
+        ##layers = neurons
+        #phi = 0.0
 
-        for idx in range(conv_len):    
-            phi += torch.sum( self.pools[idx](self.synapses[idx](neurons[idx])) * neurons[idx+1], dim=(1,2,3)).squeeze()     
+        #for idx in range(conv_len):    
+        #    phi += torch.sum( self.pools[idx](self.synapses[idx](neurons[idx])) * neurons[idx+1], dim=(1,2,3)).squeeze()     
         for j, idx in enumerate(self.lat_layer_idxs):
             phi += torch.sum( self.lat_syn[j](neurons[idx].view(mbs,-1)) * neurons[idx].view(mbs,-1), dim=1).squeeze()
-        #Phi computation changes depending on softmax == True or not
-        if not self.softmax:
-            for idx in range(conv_len, tot_len):
-                phi += torch.sum( self.synapses[idx](neurons[idx].view(mbs,-1)) * neurons[idx+1], dim=1).squeeze()
-        else:
-            # the output layer used for the prediction is no longer part of the system ! Summing until len(self.synapses) - 1 only
-            for idx in range(conv_len, tot_len-1):
-                phi += torch.sum( self.synapses[idx](neurons[idx].view(mbs,-1)) * neurons[idx+1], dim=1).squeeze()
-             
-        for idx in range(len(neurons)):
-            if targetneurons[idx].size(0) > 0:
-                # if fullclamping[idx].size(0) >  0:
-                #     neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
-                phi -= betas[idx]*criterion(neurons[idx], targetneurons[idx]).sum().squeeze()             
+        ##Phi computation changes depending on softmax == True or not
+        #if not self.softmax:
+        #    for idx in range(conv_len, tot_len):
+        #        phi += torch.sum( self.synapses[idx](neurons[idx].view(mbs,-1)) * neurons[idx+1], dim=1).squeeze()
+        #else:
+        #    # the output layer used for the prediction is no longer part of the system ! Summing until len(self.synapses) - 1 only
+        #    for idx in range(conv_len, tot_len-1):
+        #        phi += torch.sum( self.synapses[idx](neurons[idx].view(mbs,-1)) * neurons[idx+1], dim=1).squeeze()
+        #     
+        #for idx in range(len(neurons)):
+        #    if targetneurons[idx].size(0) > 0:
+        #        # if fullclamping[idx].size(0) >  0:
+        #        #     neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
+        #        phi -= betas[idx]*criterion(neurons[idx], targetneurons[idx]).sum().squeeze()             
 
         return phi

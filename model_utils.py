@@ -434,7 +434,6 @@ class P_CNN(torch.nn.Module):
                 else:
                     L = criterion(self.synapses[-1](layers[-1].view(mbs,-1)).float(), y).squeeze()  
                 phi -= beta*L            
-        
         return phi
     
 
@@ -1102,14 +1101,16 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
     GPUtil.showUtilization(all=True)
     """
     # for reconstruction only, select random portion of input to clamp
-    reconstruct = model.__class__.__name__.find('Rev') != -1
+    isreconstructmodel = model.__class__.__name__.find('Rev') != -1
     masktransform = torchvision.transforms.Compose([
                                       torchvision.transforms.RandomCrop(size=model.in_size, padding=model.in_size//2, padding_mode='constant'),
                                   ])
+    reconstructfreq = 5 # train reconstruct on 1 of x batches
 
     for epoch in range(epochs):
         run_correct = 0
         run_total = 0
+        recon_err = 0
         model.train()
 
         if hasattr(model, 'lat_syn'):
@@ -1121,13 +1122,30 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
             mbs = x.size(0)
             #if alg=='CEP' and cep_debug:
             #    x = x.double()            
+            reconstruct = isreconstructmodel and int(idx%reconstructfreq) == 0
     
             neurons = model.init_neurons(mbs, device)
             if reconstruct:
                 # results in a zero and one mask used to select which indexes of the input to fully clamp.
                 # The zeros (the padding included in the randomcrop) are where it will reconstruct the output
-                reconstructmask = masktransform(torch.ones_like(x)).bool()
-                model.fullclamping[0] = reconstructmask
+                #reconstructmask = masktransform(torch.ones_like(x)).bool()
+                reconstructmask = torch.stack([masktransform(torch.ones_like(x[0])) for i in range(mbs)])
+                model.fullclamping[0] = reconstructmask.bool()
+                classifyalso = torch.rand((1,)).item() < 0.4 # this percent of the time, simulataneoulsy nudge the classification
+                model.mode(trainclassifier=classifyalso, trainreconstruct=True)
+            elif isreconstructmodel:
+                model.mode(trainclassifier=True, trainreconstruct=False)
+                model.fullclamping[0].fill_(True)
+
+                # select random size window (of at least size 1/2 by 1/2) and location (that fits the window) to clamp on the input
+                #clampwindowsize = torch.rand((mbs,2))*1/2 + 1/2
+                #clampwindowtr = torch.rand((mbs,2))*(1-clampwindowsize)
+                #clampwindowsize = (clampwindowsize*model.in_size).int()
+                #clampwindowtr = (clampwindowtr*model.in_size).int()
+                #model.fullclamping[0] =[ [(i, clampwindowtr[i,0].item(),
+                #                             clampwindowtr[i,1].item()) for i in range(mbs-1)],
+                #    [(i, clampwindowtr[i,0].item()+clampwindowsize[i,0].item(),
+                #         clampwindowtr[i,1].item()+clampwindowsize[i,1].item()) for i in range(mbs-1)] ]
 
             if alg=='EP' or alg=='CEP':
                 # First phase
@@ -1245,44 +1263,50 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                         
             if ((idx%(iter_per_epochs//10)==0) or (idx==iter_per_epochs-1)):
                 run_acc = run_correct/run_total
-                if reconstruct:
-                    run_acc = (- (x - neurons[0]).norm(2)).data.item()
                 print('Epoch :', round(epoch_sofar+epoch+(idx/iter_per_epochs), 2),
                       '\tRun train acc :', round(run_acc,3),'\t('+str(run_correct)+'/'+str(run_total)+')\t',
                       timeSince(start, ((idx+1)+epoch*iter_per_epochs)/(epochs*iter_per_epochs)))
+                if isreconstructmodel:
+                    print('\tReconstruction error (L2) :\t', recon_err)
                 if isinstance(model, VF_CNN): 
                     angle = model.angle()
                     print('angles ',angle)
                 if check_thm and alg!='BPTT':
                     BPTT, EP = check_gdu(model, x[0:5,:], y[0:5], T1, T2, betas, criterion, alg=alg)
                     RMSE(BPTT, EP)
-            
-            if tensorboard:
-                if ((idx%(iter_per_epochs//tb_write_freq)==0) or (idx==iter_per_epochs-1)):
-                    im = lambda t: (t*255).to(torch.uint8)
+
+            im = lambda t: (t*255).to(torch.uint8)
+            if reconstruct:
+                recon_err = (- (x - neurons[0]).norm(2)).data.item()
+
+                if tensorboard:
+                    img_grid = torchvision.utils.make_grid(im((x*model.fullclamping[0])[:16].data.cpu()))
+                    # matplotlib_imshow(img_grid, one_channel=True)
+                    writer.add_image('clamped input', img_grid, epoch*iter_per_epochs+idx)
+
+                    img_grid = torchvision.utils.make_grid(im(neurons_1[0][:16].data.cpu()))
+                    # matplotlib_imshow(img_grid, one_channel=True)
+                    writer.add_image('completed input layer', img_grid, epoch*iter_per_epochs+idx)
+                
+                    img_grid = torchvision.utils.make_grid(im(neurons_2[0][:16].data.cpu()))
+                    # matplotlib_imshow(img_grid, one_channel=True)
+                    writer.add_image('nudged input layer', img_grid, epoch*iter_per_epochs+idx)
+
                     img_grid = torchvision.utils.make_grid(im(x.data.cpu()[:16]))
                     # matplotlib_imshow(img_grid, one_channel=True)
                     writer.add_image('original input', img_grid, epoch*iter_per_epochs+idx)
 
-                    if hasattr(model, 'fullclamping'):
-                        img_grid = torchvision.utils.make_grid(im((x*model.fullclamping[0])[:16].data.cpu()))
-                        # matplotlib_imshow(img_grid, one_channel=True)
-                        writer.add_image('clamped input', img_grid, epoch*iter_per_epochs+idx)
+                    recon_err = (- (x - neurons[0]).norm(2)).data.item()
+                    writer.add_scalars('reconstruct', {'recon_err': recon_err,}, epoch*iter_per_epochs+idx)
 
-                        img_grid = torchvision.utils.make_grid(im(neurons_1[0][:16].data.cpu()))
-                        # matplotlib_imshow(img_grid, one_channel=True)
-                        writer.add_image('completed input layer', img_grid, epoch*iter_per_epochs+idx)
-                    
-                        img_grid = torchvision.utils.make_grid(im(neurons_2[0][:16].data.cpu()))
-                        # matplotlib_imshow(img_grid, one_channel=True)
-                        writer.add_image('nudged input layer', img_grid, epoch*iter_per_epochs+idx)
+                    writer.close()
+            
+            if tensorboard:
+                if ((idx%(iter_per_epochs//tb_write_freq)==0) or (idx==iter_per_epochs-1)):
 
-                    # writer.add_graph(model, (x, y, neurons, 10))
                     run_acc = run_correct/run_total
-                    if reconstruct:
-                        run_acc = (- (x - neurons[0]).norm(2)).data.item()
+                    writer.add_scalars('accuracy', {'train_acc': run_acc,}, epoch*iter_per_epochs+idx)
 
-                    writer.add_scalars(model.__class__.__name__, {'train_acc': run_acc,}, epoch*iter_per_epochs+idx)
                     writer.close()
 
         if scheduler is not None: # learning rate decay step
@@ -1291,10 +1315,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
 
         test_correct = evaluate(model, test_loader, T1, device)
         test_acc_t = test_correct/(len(test_loader.dataset))
-        if reconstruct:
-            test_acc_t = (- (x - neurons[0]).norm(2)).data.item()
         if tensorboard:
-            writer.add_scalars(model.__class__.__name__, {'test_acc': test_acc_t,}, idx+epoch*iter_per_epochs)
+            writer.add_scalars('accuracy', {'test_acc': test_acc_t,}, idx+epoch*iter_per_epochs)
             writer.close()
         if save:
             test_acc.append(100*test_acc_t)
@@ -1344,9 +1366,6 @@ def evaluate(model, loader, T, device):
 
 
     acc = correct/len(loader.dataset) 
-    reconstruct = model.__class__.__name__.find('Rev') != -1
-    if reconstruct:
-        acc = (- (x - neurons[0]).norm(2)).data.item()
     print(phase+' accuracy :\t', acc)   
     return correct
 
