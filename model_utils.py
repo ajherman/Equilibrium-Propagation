@@ -588,7 +588,6 @@ class CNN_Analytical(P_CNN):
                 # print('l', layers[-1])
         
         return layers[1:] # neurons (layers excluding input)
-        x = x.view(x.size(0),-1) # flattening the input
 
     def updatetranspose(self):
         for idx in range(len(self.synapses)):
@@ -1112,6 +1111,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
         recon_err = 0
         model.train()
 
+        if hasattr(model, 'updatetranspose'):
+            model.updatetranspose()
         if hasattr(model, 'lat_syn'):
             print('lat weight norms', [l.weight.norm(1) for l in model.lat_syn])
             print(model.lat_syn[-1].weight[0:10,0:10])

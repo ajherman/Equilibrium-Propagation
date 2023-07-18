@@ -504,17 +504,18 @@ class lat_CNN(P_CNN):
 
 # lateral-connectivity on logit/classification output layer to produce softmax-like behaviour CNN
 class fake_softmax_CNN(lat_CNN):
-    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=hard_sigmoid, softmax=False):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, activation=hard_sigmoid, softmax=False):
         lat_layer_idxs = [-1] # lateral connections in final layer only
         softmax=False
-        super(fake_softmax_CNN, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, activation=hard_sigmoid, softmax=softmax)
+        self.inhibitstrength = inhibitstrength 
+        super(fake_softmax_CNN, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, activation=activation, softmax=softmax)
         for l in self.lat_syn:
             l.weight.requires_grad = False
     def updatetranspose(self):
         # LCA-like sparse coding lateral inhibition based on inner product of features (rows of weight of last layer)
         features = self.synapses[-1].weight.data
         for rowidx in range(self.nc):
-            self.lat_syn[-1].weight[rowidx,:] = - (features * features[rowidx,:]).sum(dim=1)
+            self.lat_syn[-1].weight[rowidx,:] = - self.inhibitstrength * (features * features[rowidx,:]).sum(dim=1)
 
         self.lat_syn[-1].weight.data -= torch.diag(torch.diag(self.lat_syn[-1].weight.data))
 

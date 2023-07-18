@@ -61,12 +61,14 @@ parser.add_argument('--same-update', default = False, action = 'store_true', hel
 parser.add_argument('--cep-debug', default = False, action = 'store_true', help='debug cep')
 
 
-parser.add_argument('--use-lateral', default = False, action = 'store_true', help='whether to enable the lateral/hopfield interactions (default: False)')
+parser.add_argument('--train-lateral', default = False, action = 'store_true', help='whether to enable the lateral/hopfield interactions (default: False)')
 parser.add_argument('--lat-layers', nargs='+', type = int, default = [], help='index of layers to add lateral connections to (ex: 0 1 -1) to add lateral interactions to first and second layer, last layer')
 parser.add_argument('--lat-init-zeros', default = False, action = 'store_true', help='whether to initialze the lateral/hopfield interactions with zeros (default: False)')
 parser.add_argument('--lat-lrs', nargs='+', type = float, default = [], metavar = 'l', help='lateral connection set wise lr')
-parser.add_argument('--head-lrs', nargs='+', type = float, default = [], metavar = 'l', help='(multi-head CNN) head-encoder-layer wise lr')
+parser.add_argument('--head-lrs', nargs='+', type = float, default = [], metavar = 'hl', help='(multi-head CNN) head-encoder-layer wise lr')
 parser.add_argument('--lat-wds', nargs='+', type = float, default = None, metavar = 'l', help='lateral connection set weight decays')
+parser.add_argument('--inhibitstrength',type = float, default = 0.0, metavar = 'inhibitstrength', help='coeffecient on WTA inhibitory connection in output layer (mimicing softmax)')
+
 parser.add_argument('--save-nrn', default = False, action = 'store_true', help='not sure what this is supposed to be for. it was in the check/*.sh, but not in main.py so it originally errored.')
 
 parser.add_argument('--load-path-convert', type = str, default = '', metavar = 'l', help='load a model and copy its parameters to the specified architecture (initialize new layers at identity)')
@@ -214,7 +216,7 @@ if args.load_path=='':
                                 activation=activation, softmax=args.softmax, same_update=args.same_update)
         elif args.model=='LatSoftCNN':
             model = fake_softmax_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
-                              activation=activation, softmax=False)
+                              activation=activation, inhibitstrength=args.inhibitstrength, softmax=False)
         elif args.model=='ReversibleCNN':
             model = Reversible_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                               activation=activation, softmax=args.softmax)
@@ -224,6 +226,10 @@ if args.load_path=='':
                           activation=activation, softmax=args.softmax)
         elif args.model=="RevLatCNN":
             model = RevLatCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
+                            args.lat_layers,
+                          activation=activation, softmax=args.softmax)
+        elif args.model=="HopfieldCNN":
+            model = HopfieldCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                             args.lat_layers,
                           activation=activation, softmax=args.softmax)
 
@@ -260,7 +266,7 @@ if args.load_path_convert != '':
         model.updatetranspose()
 
 
-if not(args.use_lateral) or args.lat_init_zeros:
+if not(args.train_lateral) or args.lat_init_zeros:
     print("zeroing lateral layer")
     if hasattr(model, 'lat_syn'):
         for l in model.lat_syn:
@@ -302,7 +308,7 @@ if args.todo=='train':
                 optim_params.append( {'params': model.head_encoders[idx].parameters(), 'lr': args.head_lrs[idx]} )
             else:
                 optim_params.append( {'params': model.head_encoders[idx].parameters(), 'lr': args.head_lrs[idx], 'weight_decay': args.head_wds[idx+1]} )
-    if args.use_lateral:
+    if args.train_lateral:
         if hasattr(model, 'lat_syn'):
             for idx in range(len(model.lat_syn)):
                 if args.wds is None:
