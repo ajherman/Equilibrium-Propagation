@@ -1,9 +1,9 @@
 # *.txt
 *.json
 runs/
-results/**/*.pt
-results/**/*.tar
-results/**/*.jld2
+**/*.pt
+**/*.tar
+**/*.jld2
 __pycache__/
 cifar10_pytorch/
 mnist_pytorch/
