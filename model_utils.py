@@ -1,6 +1,5 @@
 import torch
 from torch.profiler import profile, record_function, ProfilerActivity
-import GPUtil
 from torch.utils.tensorboard import SummaryWriter
 
 
