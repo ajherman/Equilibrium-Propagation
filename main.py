@@ -74,7 +74,7 @@ parser.add_argument('--lat-wds', nargs='+', type = float, default = None, metava
 parser.add_argument('--save-nrn', default = False, action = 'store_true', help='not sure what this is supposed to be for. it was in the check/*.sh, but not in main.py so it originally errored.')
 
 parser.add_argument('--load-path-convert', type = str, default = '', metavar = 'l', help='load a model and copy its parameters to the specified architecture (initialize new layers at identity)')
-parser.add_argument('--convert-place-layers', nargs='+', type = int, default = [], help='index of layers to convert from loaded model (indexes not specified should be linear layers and architecture should match original at given indexes)')
+parser.add_argument('--convert-place-layers', nargs='+', type = str, default = [], help='index of layers to convert from loaded model. use `-` as i-th input if i-th layer of original model shouldnt be used. (indexes not specified should be linear layers and architecture should match original at given indexes)')
 
 parser.add_argument('--tensorboard', default = False, action = 'store_true', help='write data to tensorboard for viewing while training')
 
@@ -260,7 +260,9 @@ if args.load_path_convert != '':
     if len(args.convert_place_layers) == 0:
         args.convert_place_layers = range(len(origmodel.synapses))
     for i, idx in enumerate(args.convert_place_layers):
-        model.synapses[idx] = origmodel.synapses[i]
+        if idx != '-':
+            idx = int(idx)
+            model.synapses[idx] = origmodel.synapses[i]
     #if origmodel.hasattr('lat_syn'):
     #    model.lat_syn[args.convert_place_lat_layers] = origmodel.lay_syn
 
