@@ -301,7 +301,7 @@ class lat_CNN(P_CNN):
                 self.lat_syn[i].weight.data -= torch.diag(torch.diag(self.lat_syn[i].weight.data))
             if 'transposesymmetric' in constraint:
                 self.lat_syn[i].weight.data = 0.5*(self.lat_syn.weight.data.T + self.lat_syn.weight.data)
-            if 'negReLu':
+            if 'negReLu' in constraint:
                 self.lat_syn[i].weight.data = -F.relu(-self.lat_syn[i].weight.data)
 
     def Phi(self, x, y, neurons, beta, criterion, use_lat=False):
@@ -379,7 +379,7 @@ class lat_CNN(P_CNN):
                     neurons[idx] = self.activation( grads[idx] )
                     neurons[idx].requires_grad = True
              
-                if False and not_mse and not(self.softmax):
+                if not_mse and not(self.softmax):
                     neurons[-1] = grads[-1]
                 else:
                     neurons[-1] = self.activation( grads[-1] )

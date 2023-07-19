@@ -58,7 +58,7 @@ parser.add_argument('--lat-wds', nargs='+', type = float, default = None, metava
 parser.add_argument('--save-nrn', default = False, action = 'store_true', help='not sure what this is supposed to be for. it was in the check/*.sh, but not in main.py so it originally errored.')
 
 parser.add_argument('--load-path-convert', type = str, default = '', metavar = 'l', help='load a model and copy its parameters to the specified architecture (initialize new layers at identity)')
-parser.add_argument('--convert-place-layers', nargs='+', type = int, default = [], help='index of layers to convert from loaded model (indexes not specified should be linear layers and architecture should match original at given indexes)')
+parser.add_argument('--convert-place-layers', nargs='+', type = str, default = [], help='index of layers to convert from loaded model. use `-` as i-th input if i-th layer of original model shouldnt be used. (indexes not specified should be linear layers and architecture should match original at given indexes)')
 
 parser.add_argument('--tensorboard', default = False, action = 'store_true', help='write data to tensorboard for viewing while training')
 
@@ -66,26 +66,29 @@ parser.add_argument('--tensorboard', default = False, action = 'store_true', hel
 def getruns(pathpattern = 'results/*/*/*/*/'):
     runs = []
     for rundir in glob.glob(pathpattern):
-        for checkptfile in glob.glob(rundir+'checkpoint.tar'):
-            statedict = torch.load(checkptfile)
+        checkptfile = glob.glob(rundir+'checkpoint.tar')
+        if len(checkptfile) > 0:
+            statedict = torch.load(checkptfile[0])
+#         else:
+#             statedict = {'train_acc': [0.0], 'test_acc': [0.0]}
             with open(rundir + 'hyperparameters.txt', 'r') as paramfile:
                 callline = paramfile.readline()
-#             runs.append({'train':      statedict['train_acc'][-1],
-#                          'test':       statedict['test_acc'][-1],
-#                          'epochs':     statedict['epoch'],
-#                          'task':       ', '.join(re.findall('--task (\w+)', callline)),
-#                          'model':      ', '.join(re.findall('--model (\w+)', callline)),
-#                          'lateral':    ', '.join(re.findall('(--use-lat|--train-lat)', callline)),
-#                          'softmax':    ', '.join(re.findall('(--softmax)', callline)),
-#                          'thirdphase': ', '.join(re.findall('(--thirdphase)', callline)),
-#                          'randomsign': ', '.join(re.findall('(--random-sign)', callline)),
-#                          'loss':       ', '.join(re.findall('--loss (\w+)', callline)),
-#                          'activation': ', '.join(re.findall('--act (\w+)', callline)),
-#                          'beta1':      ', '.join(re.findall('--betas ([^ ]+) (?:[^ ]+)', callline)),
-#                          'beta2':      ', '.join(re.findall('--betas (?:[^ ]+) ([^ ]+)', callline)),
-#                          'lat-init':   ', '.join(re.findall('--lat-init-(\w+)', callline)),
-#                          'load':       ', '.join(re.findall('--load-path-convert ([^ ]*)', callline)),
-#                          'dir':        rundir, 'callline': callline})
+    #             runs.append({'train':      statedict['train_acc'][-1],
+    #                          'test':       statedict['test_acc'][-1],
+    #                          'epochs':     statedict['epoch'],
+    #                          'task':       ', '.join(re.findall('--task (\w+)', callline)),
+    #                          'model':      ', '.join(re.findall('--model (\w+)', callline)),
+    #                          'lateral':    ', '.join(re.findall('(--use-lat|--train-lat)', callline)),
+    #                          'softmax':    ', '.join(re.findall('(--softmax)', callline)),
+    #                          'thirdphase': ', '.join(re.findall('(--thirdphase)', callline)),
+    #                          'randomsign': ', '.join(re.findall('(--random-sign)', callline)),
+    #                          'loss':       ', '.join(re.findall('--loss (\w+)', callline)),
+    #                          'activation': ', '.join(re.findall('--act (\w+)', callline)),
+    #                          'beta1':      ', '.join(re.findall('--betas ([^ ]+) (?:[^ ]+)', callline)),
+    #                          'beta2':      ', '.join(re.findall('--betas (?:[^ ]+) ([^ ]+)', callline)),
+    #                          'lat-init':   ', '.join(re.findall('--lat-init-(\w+)', callline)),
+    #                          'load':       ', '.join(re.findall('--load-path-convert ([^ ]*)', callline)),
+    #                          'dir':        rundir, 'callline': callline})
             runinfo = vars(parser.parse_args(callline.strip().split(' ')[1:]))
             runinfo['train'] = statedict['train_acc'][-1]
             runinfo['test'] = statedict['test_acc'][-1]

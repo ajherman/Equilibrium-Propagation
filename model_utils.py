@@ -1079,7 +1079,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
     x = x.to(device)
     y = y.to(device)
 
-    """
+    
     with profile(activities=[
             ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True, with_stack=True, record_shapes=True) as prof:
         with record_function("init_neurons"):
@@ -1092,12 +1092,10 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
         with record_function("synapse_update"):
             model.compute_syn_grads(x, y, neurons_1, neurons_2, betas, criterion)
 
-    prof.export_chrome_trace("trace-{}.json".format(model.__class__))
+    # prof.export_chrome_trace("trace-{}.json".format(model.__class__))
 
     print(prof.key_averages(group_by_stack_n=5).table(sort_by="cuda_memory_usage", row_limit=10)) 
 
-    GPUtil.showUtilization(all=True)
-    """
     # for reconstruction only, select random portion of input to clamp
     isreconstructmodel = model.__class__.__name__.find('Rev') != -1
     masktransform = torchvision.transforms.Compose([

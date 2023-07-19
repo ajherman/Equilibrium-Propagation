@@ -248,13 +248,24 @@ class HopfieldCNN(RevLatCNN):
         for idx in range(len(self.synapses)):
             layer = self.synapses[idx]
             if isinstance(layer, torch.nn.Conv2d):
-                transpose = torch.nn.ConvTranspose2d(layer.out_channels, layer.in_channels, layer.kernel_size, stride=layer.stride,
-                                        padding=layer.padding, dilation=layer.dilation, bias=False)
-                transpose.weight.data = layer.weight.data
+                # yes, this is the same as a convTranspose, but a normal convolution (with the kernels appropriately tranposed/flipped) uses way less memory.
+                # transpose = torch.nn.ConvTranspose2d(layer.out_channels, layer.in_channels, layer.kernel_size, stride=layer.stride,
+                if isinstance(layer.kernel_size, tuple):
+                    kern0 = layer.kernel_size[0]
+                    kern1 = layer.kernel_size[1]
+                else:
+                    kern0 = kern1 = layer.kernel_size
+                if isinstance(layer.padding, tuple):
+                    pad0 = layer.padding[0]
+                    pad1 = layer.padding[1]
+                else:
+                    pad0 = pad1 = layer.padding
+                transpose = torch.nn.Conv2d(layer.out_channels, layer.in_channels, (kern1,kern0), stride=layer.dilation, dilation = layer.stride,
+                                        padding=(kern1-1-pad0,kern0-1-pad1), bias=False)
             elif isinstance(layer, torch.nn.Linear):
                 transpose = torch.nn.Linear(layer.out_features, layer.in_features, bias=False)
-                transpose.weight.data = layer.weight.data.T
             self.syn_transpose.append(transpose)
+        self.postupdate()
 
         # reverse pooling operations
         self.unpools = []
@@ -265,16 +276,21 @@ class HopfieldCNN(RevLatCNN):
             if isinstance(pool, torch.nn.MaxPool2d):
                 self.unpools.append(torch.nn.MaxUnpool2d(pool.kernel_size, stride=pool.stride)) 
             elif isinstance(pool, torch.nn.AvgPool2d):
-                avgunpool = torch.nn.ConvTranspose2d(1, 1, pool.kernel_size, stride=pool.stride, padding=0, dilation=0, bias=False)
-                avgunpool.weight.fill_(1/pool.kernel_size**2)
+                if isinstance(pool.kernel_size, tuple):
+                    kern0 = pool.kernel_size[0]
+                    kern1 = pool.kernel_size[1]
+                else:
+                    kern0 = kern1 = pool.kernel_size
+                avgunpool = torch.nn.Conv2d(1, 1, (kern1,kern0), stride=pool.dilation, padding=(kern1-1,kern0-1), dilation=pool.stride, bias=False)
+                avgunpool.weight.data = avgunpool.weight.fill_(1/pool.kernel_size**2)
                 self.unpools.append(avgunpool)
 
-    def updatetranspose(self):
+    def postupdate(self):
         for idx in range(len(self.synapses)):
             layer = self.synapses[idx]
             transpose = self.syn_transpose[idx]
             if isinstance(layer, torch.nn.Conv2d):
-                transpose.weight.data = layer.weight.data
+                transpose.weight.data = layer.weight.data.transpose(1,0).flip(2,3)
             elif isinstance(layer, torch.nn.Linear):
                 transpose.weight.data = layer.weight.data.T
 
@@ -332,34 +348,34 @@ class HopfieldCNN(RevLatCNN):
             self.pools[idx].return_indices = True # we will need the index information to unpool
             self.unpooldata[idx].to(device)
 
-        # with torch.no_grad():
-        # simulate dynamics for T timesteps
-        for t in range(T):
-            grads = self.dPhi(grads, targetneurons, neurons, betas, fullclamping, criterion)
+        with torch.no_grad():
+            # simulate dynamics for T timesteps
+            for t in range(T):
+                grads = self.dPhi(grads, targetneurons, neurons, betas, fullclamping, criterion)
 
-            for idx in range(0,len(neurons)-1):
-                neurons[idx] = self.activation( grads[idx] )
-                # if check_thm:
-                #   neurons[idx].retain_grad()
-                # else:
-                # neurons[idx].requires_grad = True
-         
-            if not_mse and not(self.softmax):
-                neurons[-1] = grads[-1]
-            else:
-                neurons[-1] = self.activation( grads[-1] )
-            # if chek_thm:
-            #   neurons[-1].retain_grad()
-            # neurons[-1].requires_grad = True
+                for idx in range(0,len(neurons)-1):
+                    neurons[idx] = self.activation( grads[idx] )
+                    # if check_thm:
+                    #   neurons[idx].retain_grad()
+                    # else:
+                    # neurons[idx].requires_grad = True
+             
+                if not_mse and not(self.softmax):
+                    neurons[-1] = grads[-1]
+                else:
+                    neurons[-1] = self.activation( grads[-1] )
+                # if chek_thm:
+                #   neurons[-1].retain_grad()
+                # neurons[-1].requires_grad = True
 
-            # apply full clamping
-            # with torch.no_grad():
-            for idx in range(len(neurons)):
-                if fullclamping[idx].size(0) >  0:
-                    neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
+                # apply full clamping
+                # with torch.no_grad():
+                for idx in range(len(neurons)):
+                    if fullclamping[idx].size(0) >  0:
+                        neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
 
-        for idx in range(len(self.pools)):
-            self.pools[idx].return_indices = False # reset value for other functions
+            for idx in range(len(self.pools)):
+                self.pools[idx].return_indices = False # reset value for other functions
 
         return neurons
 
