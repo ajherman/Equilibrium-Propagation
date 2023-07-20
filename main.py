@@ -272,13 +272,14 @@ if args.load_path_convert != '':
 
 
 if not(args.train_lateral) or args.lat_init_zeros:
-    print("zeroing lateral layer")
     if hasattr(model, 'lat_syn'):
+        print("zeroing lateral layers")
         for l in model.lat_syn:
             l.weight.data = l.weight.data.zero_()
             if hasattr(l, 'bias'):
                 l.bias.data = l.bias.data.zero_()
     elif args.model == 'Lat_MH_CNN':
+        print("zeroing head lateral layers")
         model.head_hopfield.apply(torch.nn.init.zeros_)
 
 model.to(device)
