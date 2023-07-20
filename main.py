@@ -229,11 +229,11 @@ if args.load_path=='':
                           activation=activation, softmax=args.softmax)
         elif args.model=="RevLatCNN":
             model = RevLatCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
-                            args.lat_layers,
+                            args.lat_layers, lat_constraints = args.lat_constraints,
                           activation=activation, softmax=args.softmax)
         elif args.model=="HopfieldCNN":
             model = HopfieldCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
-                            args.lat_layers,
+                            args.lat_layers, lat_constraints = args.lat_constraints,
                           activation=activation, softmax=args.softmax)
 
                        
@@ -314,8 +314,10 @@ if args.todo=='train':
                 optim_params.append( {'params': model.head_encoders[idx].parameters(), 'lr': args.head_lrs[idx]} )
             else:
                 optim_params.append( {'params': model.head_encoders[idx].parameters(), 'lr': args.head_lrs[idx], 'weight_decay': args.head_wds[idx+1]} )
+    print('trian lat?', args.train_lateral, hasattr(model, 'lat_syn'))
     if args.train_lateral:
         if hasattr(model, 'lat_syn'):
+            print('adding lateral synapses to optimizer')
             for idx in range(len(model.lat_syn)):
                 if args.wds is None:
                     optim_params.append( {'params': model.lat_syn[idx].parameters(), 'lr': args.lat_lrs[idx]} )
