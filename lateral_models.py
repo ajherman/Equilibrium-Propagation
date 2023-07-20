@@ -379,7 +379,7 @@ class lat_CNN(P_CNN):
                     neurons[idx] = self.activation( grads[idx] )
                     neurons[idx].requires_grad = True
              
-                if not_mse and not(self.softmax):
+                if False: #not_mse and not(self.softmax):
                     neurons[-1] = grads[-1]
                 else:
                     neurons[-1] = self.activation( grads[-1] )
