@@ -1,9 +1,10 @@
 import torch
 from model_utils import * 
+from lateral_models import *
 
 class Reversible_CNN(P_CNN):
     def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=my_sigmoid, softmax=False):
-        super(Reversible_CNN, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax)
+        P_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax)
 
         self.fullclamping = []
         for idx in range(len(self.synapses)+1):
@@ -103,6 +104,15 @@ class Reversible_CNN(P_CNN):
             phi = self.Phi(targetneurons, neurons, betas, fullclamping, criterion)
             grads = torch.autograd.grad(phi, neurons, grad_outputs=self.initgradstensor, create_graph=check_thm)
 
+            print("")
+            print("================================= TN ===============================")
+            print(targetneurons)
+            print("")
+            print("============================= grads ========================")
+            print(grads)
+            for idx in range(len(grads)):
+                print('targneur, grads', targetneurons[idx].sum(), grads[idx].sum())
+
             for idx in range(0,len(neurons)-1):
                 neurons[idx] = self.activation( grads[idx] )
                 # if check_thm:
@@ -110,7 +120,7 @@ class Reversible_CNN(P_CNN):
                 # else:
                 neurons[idx].requires_grad = True
          
-            if not_mse and not(self.softmax):
+            if False: #not_mse and not(self.softmax):
                 neurons[-1] = grads[-1]
             else:
                 neurons[-1] = self.activation( grads[-1] )
@@ -129,6 +139,9 @@ class Reversible_CNN(P_CNN):
             #if T-t <= n:
             #    for idx in range(len(neurons)):
             #        neuronsout[idx] += neurons[idx]/n
+        
+        print('g', [g.sum() for g in grads])
+        print('n', [n.sum() for n in neurons])
 
         return neurons
        
@@ -195,10 +208,17 @@ class Reversible_CNN(P_CNN):
 
 
 
-class RevLatCNN(Reversible_CNN):
-    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, activation=my_sigmoid, softmax=False):
-        super(RevLatCNN, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=False)
-
+class RevLatCNN(Reversible_CNN, lat_CNN, torch.nn.Module):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=my_sigmoid, softmax=False):
+        softmax = False
+        # super(RevLatCNN, self)
+        # note - order of super inits called is important for some reason.
+        Reversible_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax)
+        self.call_super_init = False # prevents pytorch from clearing all the paramters added by the first init
+        lat_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=activation, softmax=softmax)
+        for i in range(len(self.lat_layer_idxs)):
+            self.lat_layer_idxs[i] += 1 # input layer is now in system, shift indexes by one
+        """ # will be done by super with multiple inheritance
         self.lat_layer_idxs = lat_layer_idxs
         for i in range(len(self.lat_layer_idxs)):
             while self.lat_layer_idxs[i] <= 0:
@@ -226,7 +246,7 @@ class RevLatCNN(Reversible_CNN):
             if len(channels) + idx in self.lat_layer_idxs:
                 self.lat_syn.append(torch.nn.Linear(fc_layers[idx+1], fc_layers[idx+1], bias=True))
 
-
+        """
 
     def Phi(self, targetneurons, neurons, betas, fullclamping, criterion):
         phi = Reversible_CNN.Phi(self, targetneurons, neurons, betas, fullclamping, criterion)
@@ -238,10 +258,11 @@ class RevLatCNN(Reversible_CNN):
         return phi
 
 
+
 # input-reconstructing, lateral-connectivity, analytical equation of motion, hopfield energy model
-class HopfieldCNN(RevLatCNN):
-    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, activation=my_sigmoid, softmax=False):
-        super(HopfieldCNN, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, activation=activation, softmax=False)
+class HopfieldCNN(RevLatCNN, torch.nn.Module):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=my_sigmoid, softmax=False):
+        RevLatCNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=activation, softmax=False)
 
         # define transposes of each layer to send spikes backwards
         self.syn_transpose = torch.nn.ModuleList()
@@ -326,6 +347,12 @@ class HopfieldCNN(RevLatCNN):
             # in this case, the upper/lower triangle function as the forward/backward for a self-connected layer.
             # no need to do backwards flow.
 
+        # nudge
+        for idx in range(len(1,targetneurons)):
+            if self.targetneurons.size(0) > 0:
+                if 'MSELoss' in criterion.__class__.__name__:
+                    grads[idx] += betas[idx]*(targetneurons[idx]-neurons[idx])
+
         return grads
 
     def energymodel(self, targetneurons, neurons, T, betas, fullclamping, criterion, check_thm=False):
@@ -353,6 +380,15 @@ class HopfieldCNN(RevLatCNN):
             for t in range(T):
                 grads = self.dPhi(grads, targetneurons, neurons, betas, fullclamping, criterion)
 
+                print("")
+                print("================================= TN ===============================")
+                print(targetneurons)
+                print("")
+                print("============================= grads ========================")
+                print(grads)
+                for idx in range(len(grads)):
+                    print('targneur, grads', targetneurons[idx].sum(), grads[idx].sum())
+
                 for idx in range(0,len(neurons)-1):
                     neurons[idx] = self.activation( grads[idx] )
                     # if check_thm:
@@ -360,7 +396,7 @@ class HopfieldCNN(RevLatCNN):
                     # else:
                     # neurons[idx].requires_grad = True
              
-                if not_mse and not(self.softmax):
+                if False: #not_mse and not(self.softmax):
                     neurons[-1] = grads[-1]
                 else:
                     neurons[-1] = self.activation( grads[-1] )
@@ -377,6 +413,8 @@ class HopfieldCNN(RevLatCNN):
             for idx in range(len(self.pools)):
                 self.pools[idx].return_indices = False # reset value for other functions
 
+        print('gh', [g.sum() for g in grads])
+        print('nh', [n.sum() for n in neurons])
         return neurons
 
     def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
@@ -384,12 +422,12 @@ class HopfieldCNN(RevLatCNN):
             if neurons[idx].is_leaf:
                 neurons[idx].requires_grad = False
 
-        neurons = super(HopfieldCNN, self).forward(x, y, neurons, T, beta=beta, criterion=criterion, check_thm=check_thm)
+        neurons = Reversible_CNN.forward(self, x, y, neurons, T, beta=beta, criterion=criterion, check_thm=check_thm)
         
         return neurons
 
     def init_neurons(self, mbs, device):
-        neurons = super(HopfieldCNN, self).init_neurons(mbs, device)
+        neurons = Reversible_CNN.init_neurons(self, mbs, device)
         
         for idx in range(len(self.unpools)):
             self.unpooldata[idx] = torch.tensor([], device=device)

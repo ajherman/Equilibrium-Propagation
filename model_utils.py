@@ -358,7 +358,9 @@ class VF_MLP(torch.nn.Module):
 
 class P_CNN(torch.nn.Module):
     def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=hard_sigmoid, softmax=False):
-        super(P_CNN, self).__init__()
+        # super(P_CNN, self)
+        if not hasattr(self, 'call_super_init') or self.call_super_init:
+            super(P_CNN, self).__init__()
 
         # Dimensions used to initialize neurons
         self.in_size = in_size
@@ -1278,32 +1280,35 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 recon_err = (- (x - neurons[0]).norm(2)).data.item()
 
                 if tensorboard:
+                    batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
+
                     img_grid = torchvision.utils.make_grid(im((x*model.fullclamping[0])[:16].data.cpu()))
                     # matplotlib_imshow(img_grid, one_channel=True)
-                    writer.add_image('clamped input', img_grid, epoch*iter_per_epochs+idx)
+                    writer.add_image('clamped input', img_grid, batchiter)
 
                     img_grid = torchvision.utils.make_grid(im(neurons_1[0][:16].data.cpu()))
                     # matplotlib_imshow(img_grid, one_channel=True)
-                    writer.add_image('completed input layer', img_grid, epoch*iter_per_epochs+idx)
+                    writer.add_image('completed input layer', img_grid, batchiter)
                 
                     img_grid = torchvision.utils.make_grid(im(neurons_2[0][:16].data.cpu()))
                     # matplotlib_imshow(img_grid, one_channel=True)
-                    writer.add_image('nudged input layer', img_grid, epoch*iter_per_epochs+idx)
+                    writer.add_image('nudged input layer', img_grid, batchiter)
 
                     img_grid = torchvision.utils.make_grid(im(x.data.cpu()[:16]))
                     # matplotlib_imshow(img_grid, one_channel=True)
-                    writer.add_image('original input', img_grid, epoch*iter_per_epochs+idx)
+                    writer.add_image('original input', img_grid, batchiter)
 
                     recon_err = (- (x - neurons[0]).norm(2)).data.item()
-                    writer.add_scalars('reconstruct', {'recon_err': recon_err,}, epoch*iter_per_epochs+idx)
+                    writer.add_scalars('reconstruct', {'recon_err': recon_err,}, batchiter)
 
                     writer.close()
             
             if tensorboard:
                 if ((idx%(iter_per_epochs//tb_write_freq)==0) or (idx==iter_per_epochs-1)):
+                    batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
 
                     run_acc = run_correct/run_total
-                    writer.add_scalars('accuracy', {'train_acc': run_acc,}, epoch*iter_per_epochs+idx)
+                    writer.add_scalars('accuracy', {'train_acc': run_acc,}, batchiter)
 
                     writer.close()
 
@@ -1314,7 +1319,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
         test_correct = evaluate(model, test_loader, T1, device)
         test_acc_t = test_correct/(len(test_loader.dataset))
         if tensorboard:
-            writer.add_scalars('accuracy', {'test_acc': test_acc_t,}, idx+epoch*iter_per_epochs)
+            batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
+            writer.add_scalars('accuracy', {'test_acc': test_acc_t,}, batchiter)
             writer.close()
         if save:
             test_acc.append(100*test_acc_t)

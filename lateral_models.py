@@ -263,7 +263,7 @@ class lat_CNN(P_CNN):
     def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=hard_sigmoid, softmax=False):
         # initialize default P_CNN structure, without the final fully connected layer (pass in the last layer to store proper output size)
         
-        super(lat_CNN, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax) 
+        P_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax) 
 
         self.lat_constraints = lat_constraints
         self.lat_layer_idxs = lat_layer_idxs
@@ -300,7 +300,7 @@ class lat_CNN(P_CNN):
                 # zero diagonal to remove self-interaction
                 self.lat_syn[i].weight.data -= torch.diag(torch.diag(self.lat_syn[i].weight.data))
             if 'transposesymmetric' in constraint:
-                self.lat_syn[i].weight.data = 0.5*(self.lat_syn.weight.data.T + self.lat_syn.weight.data)
+                self.lat_syn[i].weight.data = 0.5*(self.lat_syn[i].weight.data.T + self.lat_syn[i].weight.data)
             if 'negReLu' in constraint:
                 self.lat_syn[i].weight.data = -F.relu(-self.lat_syn[i].weight.data)
 
@@ -379,7 +379,7 @@ class lat_CNN(P_CNN):
                     neurons[idx] = self.activation( grads[idx] )
                     neurons[idx].requires_grad = True
              
-                if not_mse and not(self.softmax):
+                if False: #not_mse and not(self.softmax):
                     neurons[-1] = grads[-1]
                 else:
                     neurons[-1] = self.activation( grads[-1] )
@@ -440,7 +440,7 @@ class fake_softmax_CNN(lat_CNN):
         softmax=False
         self.inhibitstrength = inhibitstrength 
         self.competitiontype = competitiontype
-        super(fake_softmax_CNN, self).__init__(in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=activation, softmax=softmax)
+        lat_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=activation, softmax=softmax)
         for l in self.lat_syn:
             l.weight.requires_grad = False
         
@@ -456,7 +456,7 @@ class fake_softmax_CNN(lat_CNN):
         else:
             print('UNKNOW VALUE {} for competition_type!!'.format(self.competitiontype))
 
-        super(fake_softmax_CNN, self).postupdate()
+        lat_CNN.postupdate(self)
 
 
 
