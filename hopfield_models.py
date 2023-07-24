@@ -81,7 +81,6 @@ class Reversible_CNN(P_CNN):
         mbs = x.size(0)
         device = x.device     
 
-        
         self.targetneurons = self.xytotargetneurons(x, y)
         self.beta = self.fieldbeta(beta)
 
@@ -104,14 +103,14 @@ class Reversible_CNN(P_CNN):
             phi = self.Phi(targetneurons, neurons, betas, fullclamping, criterion)
             grads = torch.autograd.grad(phi, neurons, grad_outputs=self.initgradstensor, create_graph=check_thm)
 
-            print("")
-            print("================================= TN ===============================")
-            print(targetneurons)
-            print("")
-            print("============================= grads ========================")
-            print(grads)
-            for idx in range(len(grads)):
-                print('targneur, grads', targetneurons[idx].sum(), grads[idx].sum())
+            #print("")
+            #print("================================= TN ===============================")
+            #print(targetneurons)
+            #print("")
+            #print("============================= grads ========================")
+            #print(grads)
+            #for idx in range(len(grads)):
+            #    print('targneur, grads', targetneurons[idx].sum(), grads[idx].sum())
 
             for idx in range(0,len(neurons)-1):
                 neurons[idx] = self.activation( grads[idx] )
@@ -140,8 +139,8 @@ class Reversible_CNN(P_CNN):
             #    for idx in range(len(neurons)):
             #        neuronsout[idx] += neurons[idx]/n
         
-        print('g', [g.sum() for g in grads])
-        print('n', [n.sum() for n in neurons])
+        #print('g', [g.sum() for g in grads])
+        #print('n', [n.sum() for n in neurons])
 
         return neurons
        
@@ -260,7 +259,7 @@ class RevLatCNN(Reversible_CNN, lat_CNN, torch.nn.Module):
 
 
 # input-reconstructing, lateral-connectivity, analytical equation of motion, hopfield energy model
-class HopfieldCNN(RevLatCNN, torch.nn.Module):
+class HopfieldCNN(RevLatCNN):
     def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=my_sigmoid, softmax=False):
         RevLatCNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=activation, softmax=False)
 
@@ -302,7 +301,8 @@ class HopfieldCNN(RevLatCNN, torch.nn.Module):
                     kern1 = pool.kernel_size[1]
                 else:
                     kern0 = kern1 = pool.kernel_size
-                avgunpool = torch.nn.Conv2d(1, 1, (kern1,kern0), stride=pool.dilation, padding=(kern1-1,kern0-1), dilation=pool.stride, bias=False)
+                avgunpool = torch.nn.Conv2d(1, 1, (kern1,kern0), stride=1, padding=(kern1-1,kern0-1), dilation=pool.stride, bias=False)
+                avgunpool.weight.requires_grad = False
                 avgunpool.weight.data = avgunpool.weight.fill_(1/pool.kernel_size**2)
                 self.unpools.append(avgunpool)
 
@@ -348,10 +348,12 @@ class HopfieldCNN(RevLatCNN, torch.nn.Module):
             # no need to do backwards flow.
 
         # nudge
-        for idx in range(len(1,targetneurons)):
-            if self.targetneurons.size(0) > 0:
+        if targetneurons[0].size(0) > 0:
+            grads[0] -= 0.5*(betas[0]*(neurons[0] - targetneurons[0])) 
+        for idx in range(1,len(targetneurons)):
+            if self.targetneurons[idx].size(0) > 0:
                 if 'MSELoss' in criterion.__class__.__name__:
-                    grads[idx] += betas[idx]*(targetneurons[idx]-neurons[idx])
+                    grads[idx] -= 0.5 * (betas[idx]*(neurons[idx] - targetneurons[idx]))
 
         return grads
 
@@ -363,58 +365,59 @@ class HopfieldCNN(RevLatCNN, torch.nn.Module):
         # apply full clamping
         # with torch.no_grad():
         for idx in range(len(neurons)):
+            # neurons[idx].is_leaf = check_thm
             if fullclamping[idx].size(0) >  0:
                 neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
             # neurons[idx].requires_grad = True
 
         grads = []
         for idx in range(len(neurons)):
-            grads.append(torch.zeros_like(neurons[idx]))
+            grads.append(torch.zeros_like(neurons[idx], requires_grad=check_thm))
 
         for idx in range(len(self.pools)):
             self.pools[idx].return_indices = True # we will need the index information to unpool
             self.unpooldata[idx].to(device)
 
-        with torch.no_grad():
-            # simulate dynamics for T timesteps
-            for t in range(T):
-                grads = self.dPhi(grads, targetneurons, neurons, betas, fullclamping, criterion)
+        # with torch.no_grad():
+        # simulate dynamics for T timesteps
+        for t in range(T):
+            grads = self.dPhi(grads, targetneurons, neurons, betas, fullclamping, criterion)
 
-                print("")
-                print("================================= TN ===============================")
-                print(targetneurons)
-                print("")
-                print("============================= grads ========================")
-                print(grads)
-                for idx in range(len(grads)):
-                    print('targneur, grads', targetneurons[idx].sum(), grads[idx].sum())
+            #print("")
+            #print("================================= TN ===============================")
+            #print(targetneurons)
+            #print("")
+            #print("============================= grads ========================")
+            #print(grads)
+            #for idx in range(len(grads)):
+            #    print('targneur, grads', targetneurons[idx].sum(), grads[idx].sum())
 
-                for idx in range(0,len(neurons)-1):
-                    neurons[idx] = self.activation( grads[idx] )
-                    # if check_thm:
-                    #   neurons[idx].retain_grad()
-                    # else:
-                    # neurons[idx].requires_grad = True
-             
-                if False: #not_mse and not(self.softmax):
-                    neurons[-1] = grads[-1]
-                else:
-                    neurons[-1] = self.activation( grads[-1] )
-                # if chek_thm:
-                #   neurons[-1].retain_grad()
-                # neurons[-1].requires_grad = True
+            for idx in range(0,len(neurons)-1):
+                neurons[idx] = self.activation( grads[idx] )
+                # if check_thm:
+                #   neurons[idx].retain_grad()
+                # else:
+                # neurons[idx].requires_grad = True
+         
+            if False: #not_mse and not(self.softmax):
+                neurons[-1] = grads[-1]
+            else:
+                neurons[-1] = self.activation( grads[-1] )
+            # if chek_thm:
+            #   neurons[-1].retain_grad()
+            # neurons[-1].requires_grad = True
 
-                # apply full clamping
-                # with torch.no_grad():
-                for idx in range(len(neurons)):
-                    if fullclamping[idx].size(0) >  0:
-                        neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
+            # apply full clamping
+            # with torch.no_grad():
+            for idx in range(len(neurons)):
+                if fullclamping[idx].size(0) >  0:
+                    neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
 
-            for idx in range(len(self.pools)):
-                self.pools[idx].return_indices = False # reset value for other functions
+        for idx in range(len(self.pools)):
+            self.pools[idx].return_indices = False # reset value for other functions
 
-        print('gh', [g.sum() for g in grads])
-        print('nh', [n.sum() for n in neurons])
+        #print('gh', [g.sum() for g in grads])
+        #print('nh', [n.sum() for n in neurons])
         return neurons
 
     def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):

@@ -1,0 +1,25 @@
+#!/bin/sh
+python ../main.py \
+    --task 'CIFAR10' \
+    --model 'CNN' \
+    --channels 128 256 512 512 \
+    --kernels 3 3 3 3 \
+    --pools 'mmmm' \
+    --strides 1 1 1 1 \
+    --paddings 1 1 1 0 \
+    --fc 10 \
+    --softmax \
+    --loss 'cel' \
+    --optim 'sgd' \
+    --lrs 0.25 0.15 0.1 0.08 0.05 \
+    --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
+    --mmt 0.9 \
+    --epochs 100 \
+    --T1 150 \
+    --T2 25 \
+    --betas 0.0 0.1 \
+    --thirdphase \
+    --act 'mysig' \
+    --device 0 \
+    --todo 'train' \
+    --mbs 128

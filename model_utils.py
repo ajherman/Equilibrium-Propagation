@@ -1081,7 +1081,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
     x = x.to(device)
     y = y.to(device)
 
-    
+    """
     with profile(activities=[
             ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True, with_stack=True, record_shapes=True) as prof:
         with record_function("init_neurons"):
@@ -1097,13 +1097,14 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
     # prof.export_chrome_trace("trace-{}.json".format(model.__class__))
 
     print(prof.key_averages(group_by_stack_n=5).table(sort_by="cuda_memory_usage", row_limit=10)) 
-
+    """
     # for reconstruction only, select random portion of input to clamp
-    isreconstructmodel = model.__class__.__name__.find('Rev') != -1
+    isreconstructmodel = hasattr(model, 'fullclamping')
     masktransform = torchvision.transforms.Compose([
                                       torchvision.transforms.RandomCrop(size=model.in_size, padding=model.in_size//2, padding_mode='constant'),
                                   ])
     reconstructfreq = 5 # train reconstruct on 1 of x batches
+    isreconstructmodel = False # disable reconstruction trianing
 
     for epoch in range(epochs):
         run_correct = 0
@@ -1115,7 +1116,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
             model.postupdate()
         if hasattr(model, 'lat_syn'):
             print('lat weight norms', [l.weight.norm(1) for l in model.lat_syn])
-            print(model.lat_syn[-1].weight[0:10,0:10])
+            if len(model.lat_syn) > 0:
+                print(model.lat_syn[-1].weight[0:10,0:10])
 
         for idx, (x, y) in enumerate(train_loader):
             x, y = x.to(device), y.to(device)
@@ -1266,6 +1268,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 print('Epoch :', round(epoch_sofar+epoch+(idx/iter_per_epochs), 2),
                       '\tRun train acc :', round(run_acc,3),'\t('+str(run_correct)+'/'+str(run_total)+')\t',
                       timeSince(start, ((idx+1)+epoch*iter_per_epochs)/(epochs*iter_per_epochs)))
+                print('pred', pred[0:20])
+                print('truth', y[0:20])
                 if isreconstructmodel:
                     print('\tReconstruction error (L2) :\t', recon_err)
                 if isinstance(model, VF_CNN): 
