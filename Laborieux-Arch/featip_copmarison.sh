@@ -1,7 +1,10 @@
 #!/bin/sh
 python ../main.py \
-    --model 'CNN' \
+    --model 'LatSoftCNN' \
     --task 'CIFAR10' \
+    --competitiontype 'feature_inner_products' \
+    --inhibitstrength 1.0 \
+    --lat-constraints 'zerodiag' \
     --channels 128 256 512 512 \
     --kernels 3 3 3 3 \
     --pools 'mmmm' \
@@ -19,9 +22,11 @@ python ../main.py \
     --betas 0.0 0.5 \
     --thirdphase \
     --T1 250 \
-    --T2 30 \
+    --T2 25 \
     --mbs 128 \
     --loss 'mse' \
     --save  \
     --device 0 \
-    --load-path results/EP/mse/2023-07-18/12-16-14_gpu0
+#    --alg CEP \
+#    --load-path results/EP/cel/2023-07-18/12-05-15_gpu0
+

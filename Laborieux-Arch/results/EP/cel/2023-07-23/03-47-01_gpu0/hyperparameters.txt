@@ -1,0 +1,36 @@
+../main.py --model CNN --task CIFAR10 --channels 128 256 512 512 --kernels 3 3 3 3 --pools mmmm --strides 1 1 1 1 --paddings 1 1 1 0 --fc 10 --softmax --optim sgd --mmt 0.9 --lrs 0.25 0.15 0.1 0.08 0.05 --lr-decay --epochs 120 --wds 3e-4 3e-4 3e-4 3e-4 3e-4 --act mysig --todo train --betas 0.0 0.5 --thirdphase --T1 150 --T2 25 --mbs 128 --loss cel --save --device 0 
+
+- task: CIFAR10
+- data augmentation (if CIFAR10): False
+- learning rate decay: True
+- scale for weight init: None
+- activation: mysig
+- learning rates: [0.25, 0.15, 0.1, 0.08, 0.05]
+- weight decays: [0.0003, 0.0003, 0.0003, 0.0003, 0.0003]
+- momentum (if sgd): 0.9
+- optimizer: sgd
+- loss: cel
+- alg: EP
+- minibatch size: 128
+- T1: 150
+- T2: 25
+- betas: [0.0, 0.5]
+- random beta_2 sign: False
+- thirdphase: True
+- softmax: True
+- same update VFCNN: False
+- epochs: 120
+- seed: None
+- device: 0
+
+Poolings : [MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False), MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False), MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False), MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)] 
+
+P_CNN(
+  (synapses): ModuleList(
+    (0): Conv2d(3, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (1): Conv2d(128, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (2): Conv2d(256, 512, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (3): Conv2d(512, 512, kernel_size=(3, 3), stride=(1, 1))
+    (4): Linear(in_features=512, out_features=10, bias=True)
+  )
+)
