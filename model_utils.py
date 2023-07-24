@@ -1118,6 +1118,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
             print('lat weight norms', [l.weight.norm(1) for l in model.lat_syn])
             if len(model.lat_syn) > 0:
                 print(model.lat_syn[-1].weight[0:10,0:10])
+                print(model.lat_syn[-1].bias[0:10])
 
         for idx, (x, y) in enumerate(train_loader):
             x, y = x.to(device), y.to(device)

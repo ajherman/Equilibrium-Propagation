@@ -443,6 +443,8 @@ class fake_softmax_CNN(lat_CNN):
         lat_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=activation, softmax=softmax)
         for l in self.lat_syn:
             l.weight.requires_grad = False
+            l.bias.requires_grad = False
+            l.bias.data = l.bias.data.zero_()
         
 
     def postupdate(self):
@@ -455,6 +457,7 @@ class fake_softmax_CNN(lat_CNN):
             self.lat_syn[-1].weight.fill_(-self.inhibitstrength)
         else:
             print('UNKNOW VALUE {} for competition_type!!'.format(self.competitiontype))
+        self.lat_syn[-1].bias.data = self.lat_syn[-1].bias.data.zero_()
 
         lat_CNN.postupdate(self)
 
