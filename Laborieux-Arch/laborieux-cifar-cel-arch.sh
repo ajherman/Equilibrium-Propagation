@@ -25,6 +25,5 @@ python ../main.py \
     --loss 'cel' \
     --save  \
     --device 0 \
-#    --alg CEP \
-#    --load-path results/EP/cel/2023-07-18/12-05-15_gpu0
+    --load-path results/EP/cel/2023-07-18/12-05-15_gpu0
 
