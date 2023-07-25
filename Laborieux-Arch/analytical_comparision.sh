@@ -8,6 +8,8 @@ python ../main.py \
     --strides 1 1 1 1 \
     --paddings 1 1 1 0 \
     --fc 10 \
+    --lat-layers -1 \
+    --lat-lrs 0.01 \
     --optim 'sgd' \
     --mmt 0.9 \
     --lrs 0.25 0.15 0.1 0.08 0.05 \

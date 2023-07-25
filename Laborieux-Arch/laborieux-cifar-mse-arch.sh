@@ -14,7 +14,7 @@ python ../main.py \
     --lr-decay \
     --epochs 120 \
     --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
-    --act 'mysig' \
+    --act 'my_hard_sig' \
     --todo 'train' \
     --betas 0.0 0.5 \
     --thirdphase \
@@ -24,4 +24,4 @@ python ../main.py \
     --loss 'mse' \
     --save  \
     --device 0 \
-    --load-path results/EP/mse/2023-07-18/12-16-14_gpu0
+#    --load-path results/EP/mse/2023-07-18/12-16-14_gpu0
