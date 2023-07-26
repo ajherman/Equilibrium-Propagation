@@ -27,6 +27,7 @@ python ../main.py \
     --save  \
     --device 0 \
     --seed 3009345 \
+    --load-path results/EP/mse/2023-07-24/23-13-24_gpu0 \
 #    --alg CEP \
 #    --load-path results/EP/cel/2023-07-18/12-05-15_gpu0
 

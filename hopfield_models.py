@@ -270,6 +270,11 @@ class ModuleInterface(torch.nn.Module):
         pass
 
 # input-reconstructing, lateral-connectivity, analytical equation of motion, hopfield energy model
+@torch.jit.interface
+class MyModuleInterface(torch.nn.Module):
+    def xytotargetneurons(self, x, y) -> torch.Tensor:
+        pass
+
 class HopfieldCNN(RevLatCNN):
     def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=my_sigmoid, softmax=False, criterion=torch.nn.CrossEntropyLoss(reduction='none')):
         RevLatCNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=activation, softmax=False)
@@ -278,27 +283,15 @@ class HopfieldCNN(RevLatCNN):
         self.criterion = criterion
 
         # define transposes of each layer to send spikes backwards
-        self.syn_transpose = torch.nn.ModuleList()
-        for idx in range(len(self.synapses)):
-            layer = self.synapses[idx]
-            if isinstance(layer, torch.nn.Conv2d):
-                # yes, this is the same as a convTranspose, but a normal convolution (with the kernels appropriately tranposed/flipped) uses way less memory.
-                # transpose = torch.nn.ConvTranspose2d(layer.out_channels, layer.in_channels, layer.kernel_size, stride=layer.stride,
-                if isinstance(layer.kernel_size, tuple):
-                    kern0 = layer.kernel_size[0]
-                    kern1 = layer.kernel_size[1]
-                else:
-                    kern0 = kern1 = layer.kernel_size
-                if isinstance(layer.padding, tuple):
-                    pad0 = layer.padding[0]
-                    pad1 = layer.padding[1]
-                else:
-                    pad0 = pad1 = layer.padding
-                transpose = torch.nn.Conv2d(layer.out_channels, layer.in_channels, (kern1,kern0), stride=layer.dilation, dilation = layer.stride,
-                                        padding=(kern1-1-pad0,kern0-1-pad1), bias=False)
-            elif isinstance(layer, torch.nn.Linear):
-                transpose = torch.nn.Linear(layer.out_features, layer.in_features, bias=False)
-            self.syn_transpose.append(transpose)
+        #self.syn_transpose = torch.nn.ModuleList()
+        #for idx in range(len(self.synapses)):
+        #    layer = self.synapses[idx]
+        #    if isinstance(layer, torch.nn.Conv2d):
+        #        print()
+        #    elif isinstance(layer, torch.nn.Linear):
+        #        transpose = torch.nn.Linear(layer.out_features, layer.in_features, bias=False)
+        #        del transpose.weight # should be tied to forward weights, in postupdate()
+        #    self.syn_transpose.append(transpose)
         self.postupdate()
 
         # reverse pooling operations
@@ -340,33 +333,47 @@ class HopfieldCNN(RevLatCNN):
         #self.energymodel = torch.jit.trace(self.energymodel, (self, self.targetneurons, traceneurons, 10, self.betas, self.fullclamping, torch.nn.CrossEntropyLoss(reduction='none'), False))
 
     def postupdate(self):
-        for idx in range(len(self.synapses)):
-            layer = self.synapses[idx]
-            transpose = self.syn_transpose[idx]
-            if isinstance(layer, torch.nn.Conv2d):
-                transpose.weight.data = layer.weight.data.transpose(1,0).flip(2,3)
-            elif isinstance(layer, torch.nn.Linear):
-                transpose.weight.data = layer.weight.data.T
+        print()
+        #for idx in range(len(self.synapses)):
+        #    layer = self.synapses[idx]
+        #    transpose = self.syn_transpose[idx]
+        #    if isinstance(layer, torch.nn.Conv2d):
+        #        transpose.weight = layer.weight.transpose(1,0).flip(2,3)
+        #    elif isinstance(layer, torch.nn.Linear):
+        #        transpose.weight = layer.weight.T
 
     def convlayer(self, idx, neurons, grads):
         ## forward flow
         pool : ModuleInterface = self.pools[idx]
         syn : ModuleInterface = self.synapses[idx]
         grads[idx+1] += pool.forward(syn.forward(neurons[idx]))
-
+    def convlayerback(self, idx, neurons, grads):
         ## backward flow
         # unpool : ModuleInterface = torch.nn.Identity()#self.unpools[idx]
-        syn_t : ModuleInterface = self.syn_transpose[idx]
+        #syn_t : ModuleInterface = self.syn_transpose[idx]
         #unpool.forward
-        grads[idx] += syn_t.forward((neurons[idx+1]))
+        #grads[idx] += syn_t.forward((neurons[idx+1]))
+
+        # transpose = torch.nn.ConvTranspose2d(layer.out_channels, layer.in_channels, layer.kernel_size, stride=layer.stride,
+        layer : ModuleInterface = self.synapses[idx]
+        kern0, kern1 = layer.kernel_size
+        pad0, pad1 = layer.padding
+        # yes, this is the same as a convTranspose, but a normal convolution (with the kernels appropriately tranposed/flipped) uses way less memory.
+        #transpose = torch.nn.Conv2d(layer.out_channels, layer.in_channels, (kern1,kern0), stride=layer.dilation, dilation = layer.stride,
+        #                        padding=(kern1-1-pad0,kern0-1-pad1), bias=False)
+        #weight = layer.weight.transpose(1,0).flip(2,3)
+        #grads[idx] += F.conv2d((neurons[idx+1]), weight, stride=layer.dilation, dilation=layer.stride,padding=(kern1-1-pad0,kern0-1-pad1))
+        grads[idx] += F.conv_transpose2d((neurons[idx+1]), layer.weight, stride=layer.stride, padding=layer.padding)
 
     def fclayerforward(self, idx, neurons, grads, mbs):
         syn : ModuleInterface = self.synapses[idx]
         grads[idx+1] += syn.forward(neurons[idx].view(mbs,-1))
 
     def fclayerbackward(self, idx, neurons, grads):
-        syn_t : ModuleInterface = self.syn_transpose[idx]
-        grads[idx] += syn_t.forward(neurons[idx+1]).view(neurons[idx].size())
+        #syn_t : ModuleInterface = self.syn_transpose[idx]
+        #grads[idx] += syn_t.forward(neurons[idx+1]).view(neurons[idx].size())
+        syn : ModuleInterface = self.synapses[idx]
+        grads[idx] += F.linear(neurons[idx+1], syn.weight.T).view(neurons[idx].size())
 
     def latlayer(self, j, idx, neurons, grads, mbs):
         lat_syn : ModuleInterface = self.lat_syn[j]
@@ -387,6 +394,8 @@ class HopfieldCNN(RevLatCNN):
 
         for idx in range(conv_len):
             futures.append(torch.jit.fork(self.convlayer, idx, neurons, grads))
+        for idx in range(conv_len):
+            futures.append(torch.jit.fork(self.convlayerback, idx, neurons, grads))
 
         # fully-connected layers
 
@@ -412,7 +421,6 @@ class HopfieldCNN(RevLatCNN):
 
         return grads
 
-    @torch.no_grad()
     def energymodel(self, targetneurons, neurons, T: int, betas, fullclamping, criterion, check_thm=False):
         # T = torch.jit.annotate(int, T)
         not_mse = True #criterion.__class__.__name__.find('MSE')==-1)

@@ -1091,12 +1091,12 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
     x = x.to(device)
     y = y.to(device)
 
-    pT1 = torch.tensor(10).to(device)
+    pT1 = torch.tensor(1).to(device)
     pT2 = torch.tensor(10).to(device)
     model.criterion=criterion
     #with record_function("init_neurons"):
     neurons = model.init_neurons(x.size(0), device)
-    with profile(activities=[ProfilerActivity.CUDA], profile_memory=True, with_stack=True, record_shapes=True) as prof:
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True, with_stack=True, record_shapes=True) as prof:
         #with record_function("model_inference"):
         neurons = model(x, y, neurons, pT1, beta=beta_1)
         #neurons_1 = copy(neurons)
@@ -1108,7 +1108,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
 
     # prof.export_chrome_trace("trace-{}.json".format(model.__class__))
 
-    print(prof.key_averages(group_by_stack_n=5).table(sort_by="cuda_memory_usage", row_limit=10)) 
+    print(prof.key_averages(group_by_stack_n=10).table(sort_by="cuda_memory_usage", row_limit=20)) 
     #"""
     # for reconstruction only, select random portion of input to clamp
     isreconstructmodel = hasattr(model, 'fullclamping')
