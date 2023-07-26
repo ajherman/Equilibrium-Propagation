@@ -1,4 +1,5 @@
 # *.txt
+**/*.zip
 *.json
 runs/
 **/*.pt
@@ -7,7 +8,7 @@ runs/
 __pycache__/
 cifar10_pytorch/
 mnist_pytorch/
-*.sh
+# *.sh
 *.pyc
 imagenet_samples/
 *.out

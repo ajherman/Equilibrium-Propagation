@@ -53,7 +53,7 @@ def neurons_zero_grad(neurons):
 def copy(neurons):
     copy = []
     for n in neurons:
-        copy.append(torch.empty_like(n).copy_(n.data).requires_grad_())
+        copy.append(torch.empty_like(n).copy_(n.data).requires_grad_(n.requires_grad))
     return copy
 
 
@@ -137,7 +137,8 @@ class P_MLP(torch.nn.Module):
         return phi
     
     
-    def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
+    def forward(self, x, y, neurons, T, beta=0.0, check_thm=False):
+        criterion=self.criterion
         # Run T steps of the dynamics for static input x, label y, neurons and nudging factor beta.
         not_mse = (criterion.__class__.__name__.find('MSE')==-1)
         mbs = x.size(0)
@@ -200,7 +201,8 @@ class MLP_Analytical(P_MLP):
     def __init__(self, archi, activation=torch.tanh):
         super(MLP_Analytical, self).__init__(archi, activation)
 
-    def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
+    def forward(self, x, y, neurons, T, beta=0.0, check_thm=False):
+        criterion=self.criterion
         x = x.view(x.size(0),-1) # flattening the input
         layers = [x] + neurons 
         dn = [] # tendency of neurons
@@ -290,7 +292,8 @@ class VF_MLP(torch.nn.Module):
         return phis
     
     
-    def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
+    def forward(self, x, y, neurons, T, beta=0.0, check_thm=False):
+        criterion=self.criterion
         
         not_mse = (criterion.__class__.__name__.find('MSE')==-1)
         mbs = x.size(0)
@@ -358,7 +361,7 @@ class VF_MLP(torch.nn.Module):
 
 class P_CNN(torch.nn.Module):
     def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=hard_sigmoid, softmax=False):
-        # super(P_CNN, self)
+        # super(P_CNN, self).__init__()
         if not hasattr(self, 'call_super_init') or self.call_super_init:
             super(P_CNN, self).__init__()
 
@@ -438,7 +441,8 @@ class P_CNN(torch.nn.Module):
         return phi
     
 
-    def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
+    def forward(self, x, y, neurons, T, beta=0.0, check_thm=False):
+        criterion=self.criterion
  
         not_mse = (criterion.__class__.__name__.find('MSE')==-1)
         mbs = x.size(0)
@@ -554,7 +558,8 @@ class CNN_Analytical(P_CNN):
                 avgunpool.weight.fill_(1/pool.kernel_size**2)
                 self.unpools.append(avgunpool)
 
-    def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
+    def forward(self, x, y, neurons, T, beta=0.0, check_thm=False):
+        criterion=self.criterion
         mbs = x.size(0)
         layers = [x] + neurons 
         dn = [] # tendency of neurons
@@ -587,7 +592,6 @@ class CNN_Analytical(P_CNN):
                 for idx in range(len(dn)):
                     dn[idx] -= layers[idx+1] # exponential decay 
                     layers[idx+1] = self.activation(layers[idx+1] + dn[idx])
-                # print('l', layers[-1])
         
         return layers[1:] # neurons (layers excluding input)
 
@@ -796,7 +800,8 @@ class VF_CNN(torch.nn.Module):
         return phis
     
 
-    def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
+    def forward(self, x, y, neurons, T, beta=0.0, check_thm=False):
+        criterion=self.criterion
  
         not_mse = (criterion.__class__.__name__.find('MSE')==-1)
         mbs = x.size(0)
@@ -922,14 +927,16 @@ def check_gdu(model, x, y, T1, T2, betas, criterion, alg='EP'):
     # We first compute BPTT gradients
     # First phase up to T1-T2
     beta_1, beta_2 = betas
-    neurons = model(x, y, neurons, T1-T2, beta=beta_1, criterion=criterion)
+    model.criterion=criterion
+    neurons = model(x, y, neurons, T1-T2, beta=beta_1)
     ref_neurons = copy(neurons)
     
     
     # Last steps of the first phase
     for K in range(T2+1):
 
-        neurons = model(x, y, neurons, K, beta=beta_1, criterion=criterion) # Running K time step 
+        model.criterion=criterion
+        neurons = model(x, y, neurons, K, beta=beta_1) # Running K time step 
 
         # detach data and neurons from the graph
         x = x.detach()
@@ -940,7 +947,8 @@ def check_gdu(model, x, y, T1, T2, betas, criterion, alg='EP'):
             neurons[idx].requires_grad = True
             leaf_neurons.append(neurons[idx])
 
-        neurons = model(x, y, neurons, T2-K, beta=beta_1, criterion=criterion, check_thm=True) # T2-K time step
+        model.criterion=criterion
+        neurons = model(x, y, neurons, T2-K, beta=beta_1, check_thm=True) # T2-K time step
         
         # final loss
         if criterion.__class__.__name__.find('MSE')!=-1:
@@ -983,7 +991,8 @@ def check_gdu(model, x, y, T1, T2, betas, criterion, alg='EP'):
     # Second phase done step by step
     for t in range(T2):
         neurons_pre = copy(neurons)                                          # neurons at time step t
-        neurons = model(x, y, neurons, 1, beta=beta_2, criterion=criterion)  # neurons at time step t+1
+        model.criterion=criterion
+        neurons = model(x, y, neurons, 1, beta=beta_2)  # neurons at time step t+1
         
         model.compute_syn_grads(x, y, neurons_pre, neurons, betas, criterion, check_thm=True)  # compute the EP parameter update
 
@@ -1077,45 +1086,52 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
         epoch_sofar = checkpoint['epoch']
         angles = checkpoint['angles'] if 'angles' in checkpoint.keys() else []
 
+    #"""
     x, y = next(iter(train_loader))
     x = x.to(device)
     y = y.to(device)
 
-    
-    with profile(activities=[
-            ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True, with_stack=True, record_shapes=True) as prof:
-        with record_function("init_neurons"):
-            neurons = model.init_neurons(x.size(0), device)
-        with record_function("model_inference"):
-            model(x, y, neurons, 10, beta=beta_1, criterion=criterion)
-        neurons_1 = copy(neurons)
-        model(x, y, neurons, 10, beta=beta_2, criterion=criterion)
-        neurons_2 = copy(neurons)
-        with record_function("synapse_update"):
-            model.compute_syn_grads(x, y, neurons_1, neurons_2, betas, criterion)
+    pT1 = torch.tensor(1).to(device)
+    pT2 = torch.tensor(10).to(device)
+    model.criterion=criterion
+    #with record_function("init_neurons"):
+    neurons = model.init_neurons(x.size(0), device)
+    with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True, with_stack=True, record_shapes=True) as prof:
+        #with record_function("model_inference"):
+        neurons = model(x, y, neurons, pT1, beta=beta_1)
+        #neurons_1 = copy(neurons)
+        #model.criterion=criterion
+        #model(x, y, neurons, pT2, beta=beta_2)
+        #neurons_2 = copy(neurons)
+        ##with record_function("synapse_update"):
+        #model.compute_syn_grads(x, y, neurons_1, neurons_2, betas, criterion)
 
     # prof.export_chrome_trace("trace-{}.json".format(model.__class__))
 
-    print(prof.key_averages(group_by_stack_n=5).table(sort_by="cuda_memory_usage", row_limit=10)) 
-
+    print(prof.key_averages(group_by_stack_n=10).table(sort_by="cuda_memory_usage", row_limit=20)) 
+    #"""
     # for reconstruction only, select random portion of input to clamp
-    isreconstructmodel = model.__class__.__name__.find('Rev') != -1
+    isreconstructmodel = hasattr(model, 'fullclamping')
     masktransform = torchvision.transforms.Compose([
                                       torchvision.transforms.RandomCrop(size=model.in_size, padding=model.in_size//2, padding_mode='constant'),
                                   ])
     reconstructfreq = 5 # train reconstruct on 1 of x batches
+    isreconstructmodel = False # disable reconstruction trianing
 
     for epoch in range(epochs):
         run_correct = 0
         run_total = 0
         recon_err = 0
         model.train()
+        print(model.forward)
 
         if hasattr(model, 'postupdate'):
             model.postupdate()
         if hasattr(model, 'lat_syn'):
             print('lat weight norms', [l.weight.norm(1) for l in model.lat_syn])
-            print(model.lat_syn[-1].weight[0:10,0:10])
+            if len(model.lat_syn) > 0:
+                print(model.lat_syn[-1].weight[0:10,0:10])
+                print(model.lat_syn[-1].bias[0:10])
 
         for idx, (x, y) in enumerate(train_loader):
             x, y = x.to(device), y.to(device)
@@ -1149,10 +1165,14 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
 
             if alg=='EP' or alg=='CEP':
                 # First phase
-                neurons = model(x, y, neurons, T1, beta=beta_1, criterion=criterion)
+                model.criterion=criterion
+                neurons = model(x, y, neurons, T1, beta=beta_1)
+                #print('n-1', neurons[-1].sum())
+                #print('n0', (neurons[0] - x).sum())
                 neurons_1 = copy(neurons)
             elif alg=='BPTT':
-                neurons = model(x, y, neurons, T1-T2, beta=0.0, criterion=criterion)           
+                model.criterion=criterion
+                neurons = model(x, y, neurons, T1-T2, beta=0.0)           
                 # detach data and neurons from the graph
                 x = x.detach()
                 x.requires_grad = True
@@ -1160,7 +1180,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     neurons[k] = neurons[k].detach()
                     neurons[k].requires_grad = True
 
-                neurons = model(x, y, neurons, T2, beta=0.0, criterion=criterion, check_thm=True) # T2 time step
+                model.criterion=criterion
+                neurons = model(x, y, neurons, T2, beta=0.0, check_thm=True) # T2 time step
 
             # Predictions for running accuracy
             with torch.no_grad():
@@ -1182,14 +1203,16 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     betas = beta_1, rnd_sgn*beta_2
                     beta_1, beta_2 = betas
             
-                neurons = model(x, y, neurons, T2, beta = beta_2, criterion=criterion)
+                model.criterion=criterion
+                neurons = model(x, y, neurons, T2, beta = beta_2)
                 neurons_2 = copy(neurons)
 
                 # Third phase (if we approximate f' as f'(x) = (f(x+h) - f(x-h))/2h)
                 if thirdphase:
                     #come back to the first equilibrium
                     neurons = copy(neurons_1)
-                    neurons = model(x, y, neurons, T2, beta = - beta_2, criterion=criterion)
+                    model.criterion=criterion
+                    neurons = model(x, y, neurons, T2, beta = - beta_2)
                     neurons_3 = copy(neurons)
                     if not(isinstance(model, VF_CNN)):
                         model.compute_syn_grads(x, y, neurons_2, neurons_3, (beta_2, - beta_2), criterion)
@@ -1223,7 +1246,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                         #optimizer.param_groups[i]['weight_decay'] = 0.0
                                         
                 for k in range(T2):
-                    neurons = model(x, y, neurons, 1, beta = beta_2, criterion=criterion)   # one step
+                    model.criterion=criterion
+                    neurons = model(x, y, neurons, 1, beta = beta_2)   # one step
                     neurons_2  = copy(neurons)
                     model.compute_syn_grads(x, y, neurons_1, neurons_2, betas, criterion)   # compute cep update between 2 consecutive steps 
                     for (n, p) in model.named_parameters():
@@ -1235,10 +1259,12 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     debug(model, prev_p, optimizer)
  
                 if thirdphase:    
-                    neurons = model(x, y, neurons, T2, beta = 0.0, criterion=criterion)     # come back to s*
+                    model.criterion=criterion
+                    neurons = model(x, y, neurons, T2, beta = 0.0)     # come back to s*
                     neurons_2 = copy(neurons)
                     for k in range(T2):
-                        neurons = model(x, y, neurons, 1, beta = -beta_2, criterion=criterion)
+                        model.criterion=criterion
+                        neurons = model(x, y, neurons, 1, beta = -beta_2)
                         neurons_3 = copy(neurons)
                         model.compute_syn_grads(x, y, neurons_2, neurons_3, (beta_2, -beta_2), criterion)
                         optimizer.step()
@@ -1266,6 +1292,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 print('Epoch :', round(epoch_sofar+epoch+(idx/iter_per_epochs), 2),
                       '\tRun train acc :', round(run_acc,3),'\t('+str(run_correct)+'/'+str(run_total)+')\t',
                       timeSince(start, ((idx+1)+epoch*iter_per_epochs)/(epochs*iter_per_epochs)))
+                print('pred', pred[0:20])
+                print('truth', y[0:20])
                 if isreconstructmodel:
                     print('\tReconstruction error (L2) :\t', recon_err)
                 if isinstance(model, VF_CNN): 

@@ -78,6 +78,10 @@ parser.add_argument('--convert-place-layers', nargs='+', type = str, default = [
 
 parser.add_argument('--tensorboard', default = False, action = 'store_true', help='write data to tensorboard for viewing while training')
 
+
+parser.add_argument('--jit', default = False, action = 'store_true', help='use torch.jit trace and script to try to optimize the code for CUDA')
+parser.add_argument('--cpu', default = False, action = 'store_true', help='use CPU rather than CUDA')
+
 args = parser.parse_args()
 command_line = ' '.join(sys.argv)
 
@@ -89,7 +93,7 @@ print('\nargs\tmbs\tT1\tT2\tepochs\tactivation\tbetas')
 print('\t',args.mbs,'\t',args.T1,'\t',args.T2,'\t',args.epochs,'\t',args.act, '\t', args.betas)
 print('\n')
 
-device = torch.device('cuda:'+str(args.device) if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:'+str(args.device) if (not args.cpu) and torch.cuda.is_available() else 'cpu')
 
 
 if args.save:
@@ -234,7 +238,7 @@ if args.load_path=='':
         elif args.model=="HopfieldCNN":
             model = HopfieldCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                             args.lat_layers, lat_constraints = args.lat_constraints,
-                          activation=activation, softmax=args.softmax)
+                          activation=activation, softmax=args.softmax, criterion=criterion)
 
                        
         print('\n')
@@ -356,10 +360,41 @@ if args.todo=='train':
     if args.save and args.load_path=='':
         createHyperparametersFile(path, args, model, command_line)
         
+    if args.jit:
+        print('Tracing forwards with JIT')
+        x = torch.rand((mbs, channels[0], in_size, in_size), device=device)
+        y = torch.round(9*torch.rand((mbs,))).to(device)
+        # yhat = torch.round(9*torch.rand((mbs,))).to(device)
+        neurons = model.init_neurons(mbs, device)
+        [n.requires_grad_(False) for n in neurons]
+        print('n0 grad?', neurons[0].requires_grad)
+        T = torch.tensor(1).to(device)
+        T = 10
+        beta = torch.tensor(0.1).to(device)
+        model = model.to(device)
+        # jitcrit = torch.jit.trace(criterion, (yhat, y))
+        # invaliddata = torch.zeros((1,)).to(device) # this is passed to the unused criterion argument placed for compatability
+        print('original forward', model.forward)
+        #with torch.jit.optimized_execution(True):
+        #with profile(activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA], profile_memory=True, with_stack=True, record_shapes=True) as prof:
+        # torch.jit.optimize_for_inference
+        jitforward = (torch.jit.script(model))#, example_inputs={
+                                #model.forward: (model, x, y, neurons, T, beta) })).eval().forward
+        #def fuckingstopgraddingmyshit(*args, **kwargs):
+        #    with torch.no_grad():
+        #        neurons=jitforward(*args, **kwargs)
+        #    return neurons
+        #model.forward = fuckingstopgraddingmyshit
+                # {'x':x, 'y':y, 'neurons':neurons, 'T':T, 'beta':beta}
+        print('jit-traced forward', model.forward)
+        args.T1 = torch.as_tensor(args.T1).to(device)
+        args.T2 = torch.as_tensor(args.T1).to(device)
+        betas = torch.as_tensor(betas).to(device)
+
 
     train(model, optimizer, train_loader, test_loader, args.T1, args.T2, betas, device, args.epochs, criterion, alg=args.alg, 
                  random_sign=args.random_sign, check_thm=args.check_thm, save=args.save, path=path, checkpoint=checkpoint, 
-                 thirdphase=args.thirdphase, scheduler=scheduler, cep_debug=args.cep_debug, tensorboard=args.tensorboard)
+                 thirdphase=args.thirdphase, scheduler=scheduler, cep_debug=args.cep_debug)#, tensorboard=args.tensorboard)
 
 
 elif args.todo=='gducheck':
