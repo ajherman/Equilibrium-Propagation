@@ -1064,34 +1064,46 @@ def matplotlib_imshow(img, one_channel=False):
         plt.imshow(np.transpose(npimg, (1, 2, 0)))
 
 
-def showattacks(attackx, x, attackpreds, origpreds):
-    fig, axs = plt.subplots(1, len(attackx), figsize=(10,1))
-    plt.ylabel("original")
+def showattacks(attackx, x, attackpreds, origpreds, savefig=False, path='/tmp/attack.pdf'):
+    fig, axs = plt.subplots(3, len(attackx), figsize=(len(attackx),3))
+    axs[0,0].set_ylabel("original")
     for idx in range(len(attackx)):
-        axs[idx].imshow(x[idx][0][0].data.cpu())
-        axs[idx].set_title("pred:" + str(origpreds[idx].max(1).indices[0].data.item()))
+        axs[0,idx].imshow(x[idx].transpose(1,2,0)/2 + 0.5)
+        axs[0,idx].set_title("pred:" + str(origpreds[idx]))
+        axs[0,idx].set_xticks([])
+        axs[0,idx].set_yticks([])
 
-    fig, axs = plt.subplots(1, len(attackx), figsize=(10,1))
-    plt.ylabel("attacked")
+    axs[1,0].set_ylabel("attacked")
     for idx in range(len(attackx)):
-        axs[idx].imshow(attackx[idx][0][0].data.cpu())
-        axs[idx].set_title("pred:" + str(attackpreds[idx].max(1).indices[0].data.item()))
+        axs[1,idx].imshow(attackx[idx].transpose(1,2,0)/2 + 0.5)
+        axs[1,idx].set_title("pred:" + str(attackpreds[idx]))
+        axs[1,idx].set_xticks([])
+        axs[1,idx].set_yticks([])
 
-    fig, axs = plt.subplots(1, len(attackx), figsize=(10,1))
-    plt.ylabel("diff")
+    axs[2,0].set_ylabel("diff")
     for idx in range(len(attackx)):
-        axs[idx].imshow(attackx[idx][0][0].data.cpu() - x[idx][0][0].data.cpu())
-        axs[idx].set_title("pred:" + str(attackpreds[idx].max(1).indices[0].data.item()))
+        diff = attackx[idx].transpose(1,2,0) - x[idx].transpose(1,2,0)
+        diff -= np.min(diff)
+        diff = diff / np.max(diff)
+        axs[2,idx].imshow(diff)
+        axs[2,idx].set_xticks([])
+        axs[2,idx].set_yticks([])
+    
+    plt.tight_layout()
+    if savefig:
+        print('saving figure at ', path)
+        fig.savefig(path, bbox_inches='tight')
 
 
 class energyModelWrapper(torch.nn.Module):
     def __init__(self, model):
         super(energyModelWrapper, self).__init__()
         self.model = model
-    def setup(self, y, beta, T, device):
+    def setup(self, y, beta, T, criterion):
         self.y = y
         self.beta = beta
         self.T = T
+        self.criterion = criterion
     def forward(self, x):
         #xnograd = x.detach()
         #x.retain_grad()
@@ -1100,11 +1112,14 @@ class energyModelWrapper(torch.nn.Module):
         #                                  T=5, check_thm=False)
         #self.neurons = self.model.forward(x, self.y, self.neurons, beta=self.beta,
         #                                  T=2, check_thm=True)
+        mbs = x.size(0)
+        device = x.device
         self.neurons = self.model.init_neurons(mbs, device)
+        not_mse = self.criterion.__class__.__name__.find('MSE')==-1
 
         neurons = self.neurons
         for t in range(self.T):
-            phi = self.model.Phi(x, y, neurons, beta, criterion)
+            phi = self.model.Phi(x, self.y, self.neurons, self.beta, self.criterion)
             init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
             if self.T < 30:
                 grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=True, retain_graph=True)
@@ -1127,39 +1142,57 @@ class energyModelWrapper(torch.nn.Module):
         if not self.model.softmax:
             return self.neurons[-1]
         else:
-            return self.model.synapses[-1](self.neurons[-1])
+            return F.softmax(self.model.synapses[-1](self.neurons[-1].view(mbs,-1)), dim=1)
     def zero_grad(self):
         super(energyModelWrapper, self).zero_grad()
         self.model.zero_grad()
 
 def attack(model, loader, attack_steps, predict_steps, eps, criterion, device, path, save_adv_examples=False):
+    criterion.reduction='sum'
+    mbs = loader.batch_size
     forwardmodel = energyModelWrapper(model)
     beta = 0.0
-    art_model = PyTorchClassifier(forwardmodel, loss=criterion, nb_classes=model.nc, input_shape=x.size())
-    art_PGD = ProjectedGradientDescentPyTorch(art_model, 2, eps, 2.5*eps/20, max_iter=20, batch_size=x.size(0))
+    savepath = path + '/adversarial_examples/eps_{}/'.format(eps)
+    os.makedirs(savepath, exist_ok=True)
+    savepath += '/attack_{}__pred_{}'.format(attack_steps, predict_steps)
+
+    #mean = np.array([0.4914, 0.4822, 0.4465])[None,:,None,None]
+    #std = np.array([3*0.2023, 3*0.1994, 3*0.2010])[None,:,None,None]
+    art_model = PyTorchClassifier(forwardmodel, loss=criterion, nb_classes=model.nc, input_shape=(mbs,model.channels[0], model.in_size, model.in_size))#, preprocessing=(mean,std))
+    art_PGD = ProjectedGradientDescentPyTorch(art_model, 2, eps, 2.5*eps/20, max_iter=20, batch_size=mbs)
     adv_examples = []
+    
+    tot_correct = 0
+    tot_correct_adv = 0
     for idx, (x,y) in enumerate(loader):
         # do original, unhampered prediction for control group
-        forwardmodel.setup(y, beta, predict_steps)
-        pred = art_model.predict(x.cpu().numpy()).max(1)
-        correct = (pred == y).sum().item()
+        forwardmodel.setup(y, beta, predict_steps, criterion)
+        pred = np.argmax(art_model.predict(x.cpu().numpy()), axis=1)
+        correct = (torch.from_numpy(pred) == y).sum().item()
+        tot_correct += correct
 
         # design adversarial example and predict with that
-        forwardmodel.setup(y, beta, attack_steps)
+        forwardmodel.setup(y, beta, attack_steps, criterion)
         x_adv = art_PGD.generate(x.cpu().numpy())
-        forwardmodel.setup(y, beta, predict_steps)
-        pred_adv = art_model.predict(x_adv).max(1)
-        correct_adv = (pred_adv == y).sum().item()        
+        forwardmodel.setup(y, beta, predict_steps, criterion)
+        pred_adv = np.argmax(art_model.predict(x_adv), axis=1)
+        correct_adv = (torch.from_numpy(pred_adv) == y).sum().item()        
+        tot_correct_adv += correct_adv
 
-        print('Batch {} of {} : original accuracy={}, adversarial accuracy={}'.format(idx, len(loader), correct/y.size(0), correct_adv/y.size(0))
+        adv_success = torch.logical_and((torch.from_numpy(pred) == y), (torch.from_numpy(pred_adv) != y))
+        adv_examples.append(x_adv[adv_success])
 
-        adv_success = torch.logical_and((pred == y), (pred_adv != y))
-        adv.examples.append(x_adv[adv_success])
+        print('Batch {} of {} : original accuracy={}, adversarial accuracy={}, attack success rate={}'.format(idx, len(loader), correct/y.size(0), correct_adv/y.size(0), adv_success.sum()/y.size(0)))
+
+
+        #if (idx/len(loader))%0.1 < 0.001 and adv_success.sum() > 0:
+        if save_adv_examples and adv_success.sum() > 1:
+            showattacks(np.asarray(x_adv[adv_success]), np.asarray(x[adv_success]), np.asarray(pred_adv[adv_success]), np.asarray(pred[adv_success]), savefig=True, path=savepath+'__{}.pdf'.format(idx))
 
     if save_adv_examples:
-        np.save(path + 'PGD_attack/adversarial_examples/attack_{}__pred_{}.npy'.format(attack_steps, predict_steps), np.asarray(adv_examples))
+        np.save(savepath + '.npy', np.asarray(adv_examples))
 
-    return adv_examples
+    return tot_correct/len(loader), tot_correct_adv/len(loader), adv_examples
 
         
 def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs, criterion, alg='EP', 
