@@ -14,6 +14,9 @@ import time
 import math
 from data_utils import *
 
+from EP_attacks.art_PGD_EP import ProjectedGradientDescentPyTorch
+from EP_attacks.pytorch import PyTorchClassifier
+
 from itertools import repeat
 from torch.nn.parameter import Parameter
 import collections
@@ -1059,6 +1062,104 @@ def matplotlib_imshow(img, one_channel=False):
         plt.imshow(npimg, cmap="Greys")
     else:
         plt.imshow(np.transpose(npimg, (1, 2, 0)))
+
+
+def showattacks(attackx, x, attackpreds, origpreds):
+    fig, axs = plt.subplots(1, len(attackx), figsize=(10,1))
+    plt.ylabel("original")
+    for idx in range(len(attackx)):
+        axs[idx].imshow(x[idx][0][0].data.cpu())
+        axs[idx].set_title("pred:" + str(origpreds[idx].max(1).indices[0].data.item()))
+
+    fig, axs = plt.subplots(1, len(attackx), figsize=(10,1))
+    plt.ylabel("attacked")
+    for idx in range(len(attackx)):
+        axs[idx].imshow(attackx[idx][0][0].data.cpu())
+        axs[idx].set_title("pred:" + str(attackpreds[idx].max(1).indices[0].data.item()))
+
+    fig, axs = plt.subplots(1, len(attackx), figsize=(10,1))
+    plt.ylabel("diff")
+    for idx in range(len(attackx)):
+        axs[idx].imshow(attackx[idx][0][0].data.cpu() - x[idx][0][0].data.cpu())
+        axs[idx].set_title("pred:" + str(attackpreds[idx].max(1).indices[0].data.item()))
+
+
+class energyModelWrapper(torch.nn.Module):
+    def __init__(self, model):
+        super(energyModelWrapper, self).__init__()
+        self.model = model
+    def setup(self, y, beta, T, device):
+        self.y = y
+        self.beta = beta
+        self.T = T
+    def forward(self, x):
+        #xnograd = x.detach()
+        #x.retain_grad()
+        #self.neurons.retain_graph()
+        #self.neurons = self.model.forward(xnograd, self.y, self.neurons, beta=self.beta,
+        #                                  T=5, check_thm=False)
+        #self.neurons = self.model.forward(x, self.y, self.neurons, beta=self.beta,
+        #                                  T=2, check_thm=True)
+        self.neurons = self.model.init_neurons(mbs, device)
+
+        neurons = self.neurons
+        for t in range(self.T):
+            phi = self.model.Phi(x, y, neurons, beta, criterion)
+            init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
+            if self.T < 30:
+                grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=True, retain_graph=True)
+            else:
+                grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=False)
+
+            for idx in range(len(neurons)-1):
+                neurons[idx] = self.model.activation( grads[idx] )
+                if self.T > 29:
+                    neurons[idx].requires_grad = True
+
+            if not_mse and not(self.model.softmax):
+                neurons[-1] = grads[-1]
+            else:
+                neurons[-1] = self.model.activation( grads[-1] )
+
+            if self.T > 29:
+                neurons[-1].requires_grad = True
+        self.model.zero_grad()
+        if not self.model.softmax:
+            return self.neurons[-1]
+        else:
+            return self.model.synapses[-1](self.neurons[-1])
+    def zero_grad(self):
+        super(energyModelWrapper, self).zero_grad()
+        self.model.zero_grad()
+
+def attack(model, loader, attack_steps, predict_steps, eps, criterion, device, path, save_adv_examples=False):
+    forwardmodel = energyModelWrapper(model)
+    beta = 0.0
+    art_model = PyTorchClassifier(forwardmodel, loss=criterion, nb_classes=model.nc, input_shape=x.size())
+    art_PGD = ProjectedGradientDescentPyTorch(art_model, 2, eps, 2.5*eps/20, max_iter=20, batch_size=x.size(0))
+    adv_examples = []
+    for idx, (x,y) in enumerate(loader):
+        # do original, unhampered prediction for control group
+        forwardmodel.setup(y, beta, predict_steps)
+        pred = art_model.predict(x.cpu().numpy()).max(1)
+        correct = (pred == y).sum().item()
+
+        # design adversarial example and predict with that
+        forwardmodel.setup(y, beta, attack_steps)
+        x_adv = art_PGD.generate(x.cpu().numpy())
+        forwardmodel.setup(y, beta, predict_steps)
+        pred_adv = art_model.predict(x_adv).max(1)
+        correct_adv = (pred_adv == y).sum().item()        
+
+        print('Batch {} of {} : original accuracy={}, adversarial accuracy={}'.format(idx, len(loader), correct/y.size(0), correct_adv/y.size(0))
+
+        adv_success = torch.logical_and((pred == y), (pred_adv != y))
+        adv.examples.append(x_adv[adv_success])
+
+    if save_adv_examples:
+        np.save(path + 'PGD_attack/adversarial_examples/attack_{}__pred_{}.npy'.format(attack_steps, predict_steps), np.asarray(adv_examples))
+
+    return adv_examples
 
         
 def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs, criterion, alg='EP', 

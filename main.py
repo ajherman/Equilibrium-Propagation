@@ -397,6 +397,9 @@ if args.todo=='train':
                  thirdphase=args.thirdphase, scheduler=scheduler, cep_debug=args.cep_debug)#, tensorboard=args.tensorboard)
 
 
+elif args.todo=='attack':
+    print('Performing PGD attacks on model')
+    attack(model, test_loader, args.T1, args.T2, 0.1, criterion, device, path, save_adv_examples=args.save)     
 elif args.todo=='gducheck':
     RMSE(BPTT, EP)
     if args.save:
