@@ -412,7 +412,7 @@ elif args.todo=='attack':
         acc, acc_adv, examples, preds, preds_adv = attack(model, test_loader, args.nbatches, args.T1, args.T2, eps, criterion, device, savepath, save_adv_examples=args.save, figs=args.figs)     
         accs.append(acc)
         accs_adv.append(acc_adv)
-    if save:
+    if args.save:
         np.save(savepath + '/attacked_accuracy.npy', np.asarray([args.eps, accs_adv]))
     if args.figs and len(accs) > 1:
         fig = plt.figure()
@@ -421,6 +421,7 @@ elif args.todo=='attack':
         plt.title('accuracy vs. strength of PGD attack')
         plt.xlabel('epsilon')
         plt.ylabel('accuracy')
+        plt.legend()
         fig.savefig(savepath + '/robustness.png', bbox_inches='tight')
 elif args.todo=='gducheck':
     RMSE(BPTT, EP)

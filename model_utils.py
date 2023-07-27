@@ -1195,7 +1195,7 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
 
         #if (idx/len(loader))%0.1 < 0.001 and adv_success.sum() > 0:
         if figs and adv_success.sum() > 1:
-            showattacks(np.asarray(x_adv[adv_success]), np.asarray(x[adv_success]), np.asarray(pred_adv[adv_success]), np.asarray(pred[adv_success]), savefig=True, path=savepath+'__{}.pdf'.format(idx))
+            showattacks(np.asarray(x_adv[adv_success]), np.asarray(x[adv_success]), np.asarray(pred_adv_name[adv_success]), np.asarray(pred_name[adv_success]), savefig=True, path=savepath+'__{}.pdf'.format(idx))
 
     if save_adv_examples:
         np.save(savepath + '__examples.npy', np.asarray(adv_examples))
