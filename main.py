@@ -41,7 +41,6 @@ parser.add_argument('--mmt',type = float, default = 0.0, metavar = 'mmt', help='
 parser.add_argument('--loss', type = str, default = 'mse', metavar = 'lss', help='loss for training')
 parser.add_argument('--alg', type = str, default = 'EP', metavar = 'al', help='EP or BPTT or CEP')
 parser.add_argument('--mbs',type = int, default = 20, metavar = 'M', help='minibatch size')
-parser.add_argument('--mbs-test',type = int, default = 200, metavar = 'M', help='minibatch size for test set (can be larger since during testing grads need not be calculated)')
 parser.add_argument('--T1',type = int, default = 20, metavar = 'T1', help='Time of first phase')
 parser.add_argument('--T2',type = int, default = 4, metavar = 'T2', help='Time of second phase')
 parser.add_argument('--betas', nargs='+', type = float, default = [0.0, 0.01], metavar = 'Bs', help='Betas')
@@ -80,6 +79,9 @@ parser.add_argument('--convert-place-layers', nargs='+', type = str, default = [
 parser.add_argument('--tensorboard', default = False, action = 'store_true', help='write data to tensorboard for viewing while training')
 
 parser.add_argument('--eps', nargs='+', type = float, default = [], metavar = 'e', help='epsilon values to use for PGD attack (--todo attack)')
+parser.add_argument('--mbs-test',type = int, default = 200, metavar = 'M', help='minibatch size for test set (can be larger since during testing grads need not be calculated)')
+parser.add_argument('--nbatches',type = int, default = 20, metavar = 'M', help='maximum number of batches to make adversarial examples of')
+parser.add_argument('--figs', default = False, action='store_true', help='plot and save figures')
 
 parser.add_argument('--jit', default = False, action = 'store_true', help='use torch.jit trace and script to try to optimize the code for CUDA')
 parser.add_argument('--cpu', default = False, action = 'store_true', help='use CPU rather than CUDA')
@@ -407,10 +409,12 @@ elif args.todo=='attack':
     accs_adv = []
     for eps in args.eps:
         print('Now attacking with epsilon : ', eps)
-        acc, acc_adv, examples = attack(model, test_loader, args.T1, args.T2, eps, criterion, device, savepath, save_adv_examples=args.save)     
+        acc, acc_adv, examples, preds, preds_adv = attack(model, test_loader, args.nbatches, args.T1, args.T2, eps, criterion, device, savepath, save_adv_examples=args.save, figs=args.figs)     
         accs.append(acc)
         accs_adv.append(acc_adv)
-    if args.save and len(accs) > 1:
+    if save:
+        np.save(savepath + '/attacked_accuracy.npy', np.asarray([args.eps, accs_adv]))
+    if args.figs and len(accs) > 1:
         fig = plt.figure()
         plt.plot(args.eps, accs, label='original accuracy', linestyle='--')
         plt.plot(args.eps, accs_adv, label='attacked')

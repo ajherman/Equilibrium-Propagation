@@ -1069,14 +1069,14 @@ def showattacks(attackx, x, attackpreds, origpreds, savefig=False, path='/tmp/at
     axs[0,0].set_ylabel("original")
     for idx in range(len(attackx)):
         axs[0,idx].imshow(x[idx].transpose(1,2,0)/2 + 0.5)
-        axs[0,idx].set_title("pred:" + str(origpreds[idx]))
+        axs[0,idx].set_title(str(origpreds[idx]))
         axs[0,idx].set_xticks([])
         axs[0,idx].set_yticks([])
 
     axs[1,0].set_ylabel("attacked")
     for idx in range(len(attackx)):
         axs[1,idx].imshow(attackx[idx].transpose(1,2,0)/2 + 0.5)
-        axs[1,idx].set_title("pred:" + str(attackpreds[idx]))
+        axs[1,idx].set_title(str(attackpreds[idx]))
         axs[1,idx].set_xticks([])
         axs[1,idx].set_yticks([])
 
@@ -1147,7 +1147,7 @@ class energyModelWrapper(torch.nn.Module):
         super(energyModelWrapper, self).zero_grad()
         self.model.zero_grad()
 
-def attack(model, loader, attack_steps, predict_steps, eps, criterion, device, path, save_adv_examples=False):
+def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion, device, path, save_adv_examples=False, figs=False):
     criterion.reduction='sum'
     mbs = loader.batch_size
     forwardmodel = energyModelWrapper(model)
@@ -1161,10 +1161,14 @@ def attack(model, loader, attack_steps, predict_steps, eps, criterion, device, p
     art_model = PyTorchClassifier(forwardmodel, loss=criterion, nb_classes=model.nc, input_shape=(mbs,model.channels[0], model.in_size, model.in_size))#, preprocessing=(mean,std))
     art_PGD = ProjectedGradientDescentPyTorch(art_model, 2, eps, 2.5*eps/20, max_iter=20, batch_size=mbs)
     adv_examples = []
+    preds = []
+    preds_adv = []
     
     tot_correct = 0
     tot_correct_adv = 0
     for idx, (x,y) in enumerate(loader):
+        if idx >= nbatches:
+            break
         # do original, unhampered prediction for control group
         forwardmodel.setup(y, beta, predict_steps, criterion)
         pred = np.argmax(art_model.predict(x.cpu().numpy()), axis=1)
@@ -1173,26 +1177,32 @@ def attack(model, loader, attack_steps, predict_steps, eps, criterion, device, p
 
         # design adversarial example and predict with that
         forwardmodel.setup(y, beta, attack_steps, criterion)
-        x_adv = art_PGD.generate(x.cpu().numpy())
+        x_adv = loader.dataset.transform(torch.from_numpy(art_PGD.generate(x.cpu().numpy())))
         forwardmodel.setup(y, beta, predict_steps, criterion)
-        pred_adv = np.argmax(art_model.predict(x_adv), axis=1)
+        pred_adv = np.argmax(art_model.predict(x_adv.cpu().numpy()), axis=1)
         correct_adv = (torch.from_numpy(pred_adv) == y).sum().item()        
         tot_correct_adv += correct_adv
 
+        pred_name = np.asarray(list(map(lambda i: loader.dataset.classes[i], pred)))
+        pred_adv_name = np.asarray(list(map(lambda i: loader.dataset.classes[i], pred_adv)))
         adv_success = torch.logical_and((torch.from_numpy(pred) == y), (torch.from_numpy(pred_adv) != y))
         adv_examples.append(x_adv[adv_success])
+        preds.append(pred_name[adv_success])
+        preds_adv.append(pred_adv_name[adv_success])
 
-        print('Batch {} of {} : original accuracy={}, adversarial accuracy={}, attack success rate={}'.format(idx, len(loader), correct/y.size(0), correct_adv/y.size(0), adv_success.sum()/y.size(0)))
+        print('Batch {} of {} : original accuracy={}, adversarial accuracy={}, attack success rate={}'.format(idx, nbatches, correct/y.size(0), correct_adv/y.size(0), adv_success.sum()/y.size(0)))
 
 
         #if (idx/len(loader))%0.1 < 0.001 and adv_success.sum() > 0:
-        if save_adv_examples and adv_success.sum() > 1:
+        if figs and adv_success.sum() > 1:
             showattacks(np.asarray(x_adv[adv_success]), np.asarray(x[adv_success]), np.asarray(pred_adv[adv_success]), np.asarray(pred[adv_success]), savefig=True, path=savepath+'__{}.pdf'.format(idx))
 
     if save_adv_examples:
-        np.save(savepath + '.npy', np.asarray(adv_examples))
+        np.save(savepath + '__examples.npy', np.asarray(adv_examples))
+        np.save(savepath + '__original_pred.npy', np.asarray(preds))
+        np.save(savepath + '__attacked_pred.npy', np.asarray(preds_adv))
 
-    return tot_correct/len(loader), tot_correct_adv/len(loader), adv_examples
+    return tot_correct/nbatches/mbs, tot_correct_adv/nbatches/mbs, adv_examples, preds, preds_adv
 
         
 def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs, criterion, alg='EP', 
