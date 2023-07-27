@@ -1177,9 +1177,9 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
 
         # design adversarial example and predict with that
         forwardmodel.setup(y, beta, attack_steps, criterion)
-        x_adv = loader.dataset.transform(torch.from_numpy(art_PGD.generate(x.cpu().numpy())))
+        x_adv = (art_PGD.generate(x.cpu().numpy())) # np.vectorize(loader.dataset.transform)
         forwardmodel.setup(y, beta, predict_steps, criterion)
-        pred_adv = np.argmax(art_model.predict(x_adv.cpu().numpy()), axis=1)
+        pred_adv = np.argmax(art_model.predict(x_adv), axis=1)
         correct_adv = (torch.from_numpy(pred_adv) == y).sum().item()        
         tot_correct_adv += correct_adv
 
