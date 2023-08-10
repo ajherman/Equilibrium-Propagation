@@ -2,8 +2,15 @@
 **/*.zip
 *.json
 runs/
+results/
+**/runs/
+**/results/
 **/*.pt
 **/*.tar
+*.tar.gz
+**/*.tar.gz
+*.zip
+**/*.zip
 **/*.jld2
 __pycache__/
 cifar10_pytorch/

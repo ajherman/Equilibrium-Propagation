@@ -63,7 +63,9 @@ parser.add_argument('--cep-debug', default = False, action = 'store_true', help=
 
 parser.add_argument('--train-lateral', default = False, action = 'store_true', help='whether to enable the lateral/hopfield interactions (default: False)')
 parser.add_argument('--lat-layers', nargs='+', type = int, default = [], help='index of layers to add lateral connections to (ex: 0 1 -1) to add lateral interactions to first and second layer, last layer')
+parser.add_argument('--sparse-layers', nargs='+', type = int, default = [], help='index of layers to add lateral connections to trained to make the neurons sparse (via an L1 penalty with coeffecient lambdas[1])')
 parser.add_argument('--lat-constraints', nargs='+', type = str, default = [], metavar = 'lc', help='constraints to impose to lateral connections (layer-wise). e.g. `--lat-constraints zerodiag transposesymmetric+negReLu none` to zero the diagonal (self-interactions) of the first lateral layer in the model, and ensure the second layer is a symmetric matrix with only negative values (this combines two possible constraints).')
+parser.add_argument('--comp-syn-constraints', nargs='+', type = str, default = [], metavar = 'lc', help='constraints to impose on competitive sparsifying lateral connections (layer-wise). e.g. `--lat-constraints zerodiag transposesymmetric+negReLu none` to zero the diagonal (self-interactions) of the first lateral layer in the model, and ensure the second layer is a symmetric matrix with only negative values (this combines two possible constraints).')
 parser.add_argument('--competitiontype', type = str, default = 'none', metavar = 'ct', help='(LatSoftCNN) type of lateral inhibition to apply in output classification layer (feature_inner_products or uniform_inhbition). will be scaled by --inhibitstrength')
 parser.add_argument('--inhibitstrength',type = float, default = 0.0, metavar = 'inhibitstrength', help='(LatSoftCNN) coeffecient on WTA inhibitory connection in output layer (mimicing softmax)')
 parser.add_argument('--lat-init-zeros', default = False, action = 'store_true', help='whether to initialze the lateral/hopfield interactions with zeros (default: False)')
@@ -77,6 +79,8 @@ parser.add_argument('--load-path-convert', type = str, default = '', metavar = '
 parser.add_argument('--convert-place-layers', nargs='+', type = str, default = [], help='index of layers to convert from loaded model. use `-` as i-th input if i-th layer of original model shouldnt be used. (indexes not specified should be linear layers and architecture should match original at given indexes)')
 
 parser.add_argument('--tensorboard', default = False, action = 'store_true', help='write data to tensorboard for viewing while training')
+
+parser.add_argument('--lambdas', nargs='+', type = float, default=[], help='sparse coding coeffecient for free phase and nudged phase.')
 
 parser.add_argument('--eps', nargs='+', type = float, default = [], metavar = 'e', help='epsilon values to use for PGD attack (--todo attack)')
 parser.add_argument('--mbs-test',type = int, default = 200, metavar = 'M', help='minibatch size for test set (can be larger since during testing grads need not be calculated)')
@@ -147,8 +151,10 @@ elif args.task=='CIFAR10':
          transform_train = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), 
                                                           torchvision.transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), 
                                                                                            std=(3*0.2023, 3*0.1994, 3*0.2010)) ])   
-
-    transform_test = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), 
+    if args.todo=='attack':
+        transform_test = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
+    else:
+        transform_test = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), 
                                                      torchvision.transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), 
                                                                                       std=(3*0.2023, 3*0.1994, 3*0.2010)) ]) 
 
@@ -228,6 +234,11 @@ if args.load_path=='':
             model = fake_softmax_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                               activation=activation, competitiontype=args.competitiontype, lat_constraints=args.lat_constraints, 
                               inhibitstrength=args.inhibitstrength, softmax=False)
+        elif args.model=='SparseCNN':
+            model = sparseCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
+                              lat_layer_idxs=args.lat_layers, sparse_layer_idxs=args.sparse_layers, comp_syn_constraints = args.comp_syn_constraints,
+                              competitiontype=args.competitiontype, lat_constraints=args.lat_constraints,
+                              inhibitstrength=args.inhibitstrength, activation=activation, softmax=args.softmax)
         elif args.model=='ReversibleCNN':
             model = Reversible_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                               activation=activation, softmax=args.softmax)
@@ -272,7 +283,9 @@ if args.load_path_convert != '':
             idx = int(idx)
             model.synapses[idx] = origmodel.synapses[i]
     #if origmodel.hasattr('lat_syn'):
-    #    model.lat_syn[args.convert_place_lat_layers] = origmodel.lay_syn
+    #    if len(args.convert_place_lat_layers) == 0:
+    #        args.convert_place_lat_layers = range(len(origmodel.synapses))
+    #    model.lat_syn[args.convert_place_lat_layers] = origmodel.lat_syn
 
     # modify lateral or tranposed layers if necessary based on sourced weights
     if hasattr(model, 'updatetranspose'):
@@ -343,6 +356,25 @@ if args.todo=='train':
     elif args.optim=='adam':
         optimizer = torch.optim.Adam( optim_params )
 
+    if isinstance(model, sparseCNN):
+        model.lambdas = args.lambdas
+        
+        sparse_op = []
+        idx = 0
+        for modulelist in (model.conv_comp_layers, model.fc_comp_layers):
+            for layer in modulelist:
+                if args.lat_wds is None:
+                    sparse_op.append( {'params': layer.parameters(), 'lr': args.lat_lrs[idx]} )
+                else:
+                    sparse_op.append( {'params': layer.parameters(), 'lr': args.lat_lrs[idx], 'weight_decay': args.lat_wds[idx]} )
+            idx += 1
+
+        model.sparse_optim = torch.optim.SGD( sparse_op, momentum=args.mmt )
+        if args.lr_decay:
+            #scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[40,80,120], gamma=0.1)
+            model.sparse_lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(model.sparse_optim, 100, eta_min=1e-5)
+
+
     # Constructing the scheduler
     if args.lr_decay:
         #scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[40,80,120], gamma=0.1)
@@ -354,6 +386,8 @@ if args.todo=='train':
     if args.load_path!='':
         checkpoint = torch.load(args.load_path + '/checkpoint.tar')
         optimizer.load_state_dict(checkpoint['opt'])
+        if 'sparse_optim' in checkpoint.keys():
+            opt_sparse.load_state_dict(checkpoint['sparse_optim'])
         if checkpoint['scheduler'] is not None and args.lr_decay:
             scheduler.load_state_dict(checkpoint['scheduler'])
     else: 
@@ -422,7 +456,7 @@ elif args.todo=='attack':
         plt.xlabel('epsilon')
         plt.ylabel('accuracy')
         plt.legend()
-        fig.savefig(savepath + '/robustness.png', bbox_inches='tight')
+        fig.savefig(savepath + '/robustness.pdf', bbox_inches='tight')
 elif args.todo=='gducheck':
     RMSE(BPTT, EP)
     if args.save:

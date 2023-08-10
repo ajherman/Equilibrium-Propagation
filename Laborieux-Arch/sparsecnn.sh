@@ -1,10 +1,14 @@
 #!/bin/sh
 python ../main.py \
-    --model 'LatSoftCNN' \
+    --model 'SparseCNN' \
     --task 'CIFAR10' \
     --competitiontype 'feature_inner_products' \
     --inhibitstrength 1.0 \
-    --lat-constraints 'zerodiag' \
+    --sparse-layers -2 -1 \
+    --lambdas 0.0 0.5 \
+    --train-lat \
+    --comp-syn-constraints 'zerodiag,transposesymmetric' 'zerodiag,transposesymmetric' \
+    --lat-lrs 0.1 0.5 \
     --channels 128 256 512 512 \
     --kernels 3 3 3 3 \
     --pools 'mmmm' \
@@ -26,9 +30,6 @@ python ../main.py \
     --mbs 128 \
     --loss 'mse' \
     --data-aug \
-    --save  \
     --device 0 \
-    --seed 8453 \
-#    --alg CEP \
-#    --load-path results/EP/cel/2023-07-18/12-05-15_gpu0
+    --seed $1 \
 

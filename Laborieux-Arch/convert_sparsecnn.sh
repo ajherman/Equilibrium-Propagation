@@ -1,10 +1,9 @@
 #!/bin/sh
 python ../main.py \
-    --model 'LatSoftCNN' \
+    --model 'SparseCNN' \
     --task 'CIFAR10' \
     --competitiontype 'feature_inner_products' \
     --inhibitstrength 1.0 \
-    --lat-constraints 'zerodiag' \
     --channels 128 256 512 512 \
     --kernels 3 3 3 3 \
     --pools 'mmmm' \
@@ -19,16 +18,14 @@ python ../main.py \
     --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
     --act 'my_hard_sig' \
     --todo 'train' \
-    --betas 0.0 0.5 \
+    --betas 0.0 0.005 \
     --thirdphase \
     --T1 250 \
     --T2 25 \
     --mbs 128 \
     --loss 'mse' \
     --data-aug \
-    --save  \
     --device 0 \
-    --seed 8453 \
-#    --alg CEP \
-#    --load-path results/EP/cel/2023-07-18/12-05-15_gpu0
+    --seed 937 \
+    --load-path-convert results/EP/cel/2023-07-29/origcode_11-01-25_gpu0_120epochs \
 

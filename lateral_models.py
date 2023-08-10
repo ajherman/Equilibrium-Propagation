@@ -295,14 +295,22 @@ class lat_CNN(P_CNN):
                 self.lat_syn.append(torch.nn.Linear(fc_layers[idx+1], fc_layers[idx+1], bias=True))
 
     def postupdate(self):
-        for i, constraint in enumerate(self.lat_constraints):
-            if 'zerodiag' in constraint:
-                # zero diagonal to remove self-interaction
-                self.lat_syn[i].weight.data -= torch.diag(torch.diag(self.lat_syn[i].weight.data))
-            if 'transposesymmetric' in constraint:
-                self.lat_syn[i].weight.data = 0.5*(self.lat_syn[i].weight.data.T + self.lat_syn[i].weight.data)
-            if 'negReLu' in constraint:
-                self.lat_syn[i].weight.data = -F.relu(-self.lat_syn[i].weight.data)
+        with torch.no_grad():
+            for i, constraint in enumerate(self.lat_constraints):
+                if 'zerodiag' in constraint:
+                    # zero diagonal to remove self-interaction
+                    self.lat_syn[i].weight.data -= torch.diag(torch.diag(self.lat_syn[i].weight.data))
+                if 'transposesymmetric' in constraint:
+                    self.lat_syn[i].weight.data = 0.5*(self.lat_syn[i].weight.data + self.lat_syn[i].weight.data.transpose(0,1))
+                if 'negReLu' in constraint:
+                    self.lat_syn[i].weight.data = -F.relu(-self.lat_syn[i].weight.data)
+
+
+    def setmode(train_vert=True, train_lat=True):
+        for idx in range(len(self.synapses)):
+            self.synapses[idx].requires_grad_(trian_vert)
+        for idx in range(len(self.lat_syn)):
+            self.lat_syn[idx].requires_grad_(train_lat)
 
     def Phi(self, x, y, neurons, beta, criterion, use_lat=False):
 
@@ -449,7 +457,6 @@ class fake_softmax_CNN(lat_CNN):
 
     def postupdate(self):
         if self.competitiontype == 'feature_inner_products':
-            # LCA-like sparse coding lateral inhibition based on inner product of features (rows of weight of last layer)
             features = self.synapses[-1].weight.data
             for rowidx in range(self.nc):
                 self.lat_syn[-1].weight[rowidx,:] = - self.inhibitstrength * (features * features[rowidx,:]).sum(dim=1)
@@ -464,3 +471,125 @@ class fake_softmax_CNN(lat_CNN):
 
 
 
+# lateral inhibition locally in convolutional layer to encourage sparsity, robustness
+class sparseCNN(lat_CNN):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs=[-1], comp_syn_constraints=['zerodiag+transposesymmetric'], activation=hard_sigmoid, softmax=False):
+        self.inhibitstrength = inhibitstrength 
+        self.competitiontype = competitiontype
+        lat_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=activation, softmax=softmax)
+
+        for idx in range(len(sparse_layer_idxs)):
+            if sparse_layer_idxs[idx] < 0:
+                sparse_layer_idxs[idx] += len(self.synapses)
+        self.sparse_layer_idxs = sparse_layer_idxs
+        self.comp_syn_constraints = comp_syn_constraints
+
+        self.conv_comp_layers = torch.nn.ModuleList()
+        self.fc_comp_layers = torch.nn.ModuleList()
+        size = in_size
+
+        # convolutional (local) competition: kernel connects all neurons which share any of their input
+        for idx in range(len(kernels)):
+            if idx in sparse_layer_idxs:
+                compete_radius = math.ceil((kernels[idx])/(strides[idx])) - 1 # number of neurons in one direction between this neuron and the first neuron without any of the same inputs (exclusive)
+                compete_range = compete_radius*2 + 1 # width of block of neurons which share any input neurons
+                self.conv_comp_layers.append(torch.nn.Conv2d(channels[idx+1], channels[idx+1], compete_range, padding=compete_radius, bias=True))
+                #self.conv_comp_layers[idx].requires_grad_(False)
+
+        for idx in range(len(fc)):
+            if idx+len(kernels) in sparse_layer_idxs:
+                self.fc_comp_layers.append(torch.nn.Linear(fc[idx], fc[idx], bias=True))
+                #self.fc_comp_layers[idx].requires_grad_(False)
+
+        with torch.no_grad():
+            # initialize competition lateral connections
+            if competitiontype == 'feature_inner_products':
+                # LCA-like sparse coding lateral inhibition based on inner product of features (rows of weight of last layer)
+                for j, layer in enumerate(self.conv_comp_layers):
+                    idx = self.sparse_layer_idxs[j]
+                    features = self.synapses[idx].weight.data / self.synapses[idx].weight.data.norm(2, dim=(1,2,3))[:,None,None,None]
+                    for rowidx in range(features.size(0)):
+                        layer.weight[rowidx,:,:,:] = (- inhibitstrength * (features * features[rowidx,:,:,:]).sum(dim=(1,2,3)))[None,:,None,None].expand(1, -1, layer.kernel_size[0], layer.kernel_size[1])
+                        # remove self-connections (same feature to same feature to the same pixel -> [rowidx, rowidx, centerx, centery])
+                        centerx = math.floor(layer.kernel_size[0]/2)
+                        centery = math.floor(layer.kernel_size[1]/2)
+                        layer.weight[rowidx,rowidx,centerx,centery].zero_()
+                        layer.bias.zero_()
+
+                conv_len = len(self.channels)-1
+                for idx, layer in enumerate(self.fc_comp_layers):
+                    features = self.synapses[conv_len+idx].weight.data / self.synapses[conv_len+idx].weight.data.norm(2, dim=1)[:,None]
+                    for rowidx in range(features.size(0)):
+                        layer.weight[:,rowidx] = - inhibitstrength * (features * features[rowidx,:]).sum(dim=1)
+                        layer.weight[rowidx,rowidx].zero_()
+                        layer.bias.zero_()
+                    layer.weight.data = layer.weight.data.contiguous() # setting columns with rows makes it column rather than row major in memory
+            elif competitiontype == 'uniform_inhibition':
+                for layer in self.conv_comp_layers:
+                    layer.weight = layer.weight.fill_(-inhibitstrength)
+                    layer.bias.zero_()
+                for layer in self.fc_comp_layers:
+                    layer.weight = layer.weight.fill_(-inhibitstrength)
+                    layer.bias.zero_()
+            else:
+                print('UNKNOW VALUE {} for competition_type!!'.format(competitiontype))
+
+    
+    def setmode(train_vert, train_lat, train_comp):
+        lat_CNN.setmode(train_vert, train_lat)
+    
+        for idx in range(len(self.conv_comp_layers)):
+            self.conv_comp_layers[idx].requires_grad_(train_comp)
+        for idx in range(len(self.fc_comp_layers)):
+            self.fc_comp_layers[idx].requires_grad_(train_comp)
+
+
+    def postupdate(self):
+        lat_CNN.postupdate(self)
+        
+        with torch.no_grad():
+            for i, constraint in enumerate(self.comp_syn_constraints):
+                if i < len(self.conv_comp_layers):
+                    layer = self.conv_comp_layers[i]
+                    if 'zerodiag' in constraint:
+                        # zero diagonal to remove self-interaction
+                        centerx = math.floor(layer.kernel_size[0]/2)
+                        centery = math.floor(layer.kernel_size[1]/2)
+                        layer.weight[:,:,centerx,centery] -= torch.diag(torch.diag(layer.weight[:,:,centerx,centery]))
+                else:
+                    layer = self.fc_comp_layers[i-len(self.conv_comp_layers)]
+                    if 'zerodiag' in constraint:
+                        layer.weight -= torch.diag(torch.diag(layer.weight))
+                if 'transposesymmetric' in constraint:
+                    layer.weight.data = 0.5*(layer.weight.data + layer.weight.data.transpose(0,1)) # order is important, otherwise it will be transposed in memory
+                if 'negReLu' in constraint:
+                    layer.weight.data = -F.relu(-layer.weight.data)
+        
+
+    def Phi(self, x, y, neurons, beta, criterion):
+        phi = lat_CNN.Phi(self, x, y, neurons, beta, criterion)
+
+        conv_len = len(self.channels)-1
+
+        for j, layer in enumerate(self.conv_comp_layers):
+            idx = self.sparse_layer_idxs[j]
+            phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=(1,2,3))
+
+        for j, layer in enumerate(self.fc_comp_layers):
+            idx = self.sparse_layer_idxs[j+len(self.conv_comp_layers)]
+            phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=1)
+
+        return phi
+
+    def compute_syn_grads_sparsity(self, x, y, neurons_1, neurons_2, beta, lambdas, criterion, check_thm=False):
+        #self.setmode(train_vert=False, train_lat=False, trian_comp=True)
+        
+        self.zero_grad()            # p.grad is zero
+        phi_1 = self.Phi(x, y, neurons_1, beta, criterion)
+        phi_1 = phi_1.mean()
+        
+        phi_2 = self.Phi(x, y, neurons_2, beta, criterion)
+        phi_2 = phi_2.mean()
+        
+        delta_phi = (phi_2 - phi_1)/(lambdas[1] - lambdas[0])        
+        delta_phi.backward() # p.grad = -(d_Phi_2/dp - d_Phi_1/dp)/(beta_2 - beta_1) ----> dL/dp  by the theorem

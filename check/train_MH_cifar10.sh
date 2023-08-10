@@ -1,0 +1,2 @@
+#!/bin/sh
+python main.py --model 'Lat_MH_CNN' --task 'CIFAR10' --channels 128 256 512 --kernels 3 3 3 --pools 'mmm' --strides 1 1 1 --paddings 0 0 0 --fc 10 --optim 'adam' --lrs 5e-5 5e-5 1e-5 7e-6 --head-lrs 3e-5 2e-5 3e-5 2e-5 3e-5 2e-5 3e-5 2e-5 3e-5 2e-5 --epochs 10 --act 'hard_sigmoid' --todo 'train' --betas 0.0 0.5 --T1 200 --T2 20 --mbs 128 --check-thm --random-sign --loss 'mse' --save --save-nrn  --device 0 --load-path 'results/EP/mse/2023-06-28/16-29-36_gpu0/'

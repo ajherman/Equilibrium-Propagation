@@ -36,7 +36,6 @@ parser.add_argument('--scale',type = float, default = None, metavar = 'g', help=
 parser.add_argument('--save', default = False, action = 'store_true', help='saving results')
 parser.add_argument('--todo', type = str, default = 'train', metavar = 'tr', help='training or plot gdu curves')
 parser.add_argument('--load-path', type = str, default = '', metavar = 'l', help='load a model')
-
 parser.add_argument('--seed',type = int, default = None, metavar = 's', help='random seed')
 parser.add_argument('--device',type = int, default = 0, metavar = 'd', help='device')
 parser.add_argument('--thirdphase', default = False, action = 'store_true', help='add third phase for higher order evaluation of the gradient (default: False)')
@@ -62,13 +61,23 @@ parser.add_argument('--convert-place-layers', nargs='+', type = str, default = [
 
 parser.add_argument('--tensorboard', default = False, action = 'store_true', help='write data to tensorboard for viewing while training')
 
+parser.add_argument('--lambdas', nargs='+', type = float, default=[], help='sparse coding coeffecient for free phase and nudged phase.')
 
-def getruns(pathpattern = 'results/*/*/*/*/'):
+parser.add_argument('--eps', nargs='+', type = float, default = [], metavar = 'e', help='epsilon values to use for PGD attack (--todo attack)')
+parser.add_argument('--mbs-test',type = int, default = 200, metavar = 'M', help='minibatch size for test set (can be larger since during testing grads need not be calculated)')
+parser.add_argument('--nbatches',type = int, default = 20, metavar = 'M', help='maximum number of batches to make adversarial examples of')
+parser.add_argument('--figs', default = False, action='store_true', help='plot and save figures')
+
+parser.add_argument('--jit', default = False, action = 'store_true', help='use torch.jit trace and script to try to optimize the code for CUDA')
+parser.add_argument('--cpu', default = False, action = 'store_true', help='use CPU rather than CUDA')
+
+
+def getruns(prefix='./', pathpattern = 'results/*/*/*/*/', map_device=torch.device('cpu')):
     runs = []
-    for rundir in glob.glob(pathpattern):
+    for rundir in glob.glob(prefix+pathpattern):
         checkptfile = glob.glob(rundir+'checkpoint.tar')
         if len(checkptfile) > 0:
-            statedict = torch.load(checkptfile[0])
+            statedict = torch.load(checkptfile[0], map_location=map_device)
 #         else:
 #             statedict = {'train_acc': [0.0], 'test_acc': [0.0]}
             with open(rundir + 'hyperparameters.txt', 'r') as paramfile:

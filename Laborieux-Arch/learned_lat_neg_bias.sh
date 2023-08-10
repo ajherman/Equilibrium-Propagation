@@ -1,10 +1,7 @@
 #!/bin/sh
 python ../main.py \
-    --model 'LatSoftCNN' \
+    --model 'LateralCNN' \
     --task 'CIFAR10' \
-    --competitiontype 'feature_inner_products' \
-    --inhibitstrength 1.0 \
-    --lat-constraints 'zerodiag' \
     --channels 128 256 512 512 \
     --kernels 3 3 3 3 \
     --pools 'mmmm' \
@@ -20,6 +17,7 @@ python ../main.py \
     --act 'my_hard_sig' \
     --todo 'train' \
     --betas 0.0 0.5 \
+    --lambdas $1 \
     --thirdphase \
     --T1 250 \
     --T2 25 \
@@ -28,7 +26,8 @@ python ../main.py \
     --data-aug \
     --save  \
     --device 0 \
-    --seed 8453 \
+    --seed $2 \
+#    --lat-constraints 'zerodiag' \
 #    --alg CEP \
 #    --load-path results/EP/cel/2023-07-18/12-05-15_gpu0
 
