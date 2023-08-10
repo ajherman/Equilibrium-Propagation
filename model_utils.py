@@ -1495,6 +1495,9 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                         print('\t\tneurons_3 L1', [(neurons_3[idx]).norm(1).item() for idx in range(len(neurons_1))])
                         print('\t\tneurons_2-neurons_3 L2', [(neurons_2[idx]-neurons_3[idx]).norm(2).item() for idx in range(len(neurons_1))])
                     print('\t\tneurons_1-neurons_2 L2', [(neurons_2[idx]-neurons_1[idx]).norm(2).item() for idx in range(len(neurons_1))])
+                    print('\tsparse lat fc connections :', model.fc_comp_layers[-1].weight.cpu().detach())
+                    print('\tsparse lat fc connections bias:', model.fc_comp_layers[-1].bias.cpu().detach())
+                    print('\tsparse lat conv connections bias:', model.conv_comp_layers[-1].bias.cpu().detach())
                 
                         
             # run sparse training step
@@ -1571,6 +1574,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
 
         test_correct = evaluate(model, test_loader, T1, device)
         test_acc_t = test_correct/(len(test_loader.dataset))
+        run_acc = run_correct/run_total
         if tensorboard:
             batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
             writer.add_scalars('accuracy', {'test_acc': test_acc_t,}, batchiter)
