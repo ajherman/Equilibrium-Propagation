@@ -380,8 +380,7 @@ class lat_CNN(P_CNN):
         else:
              for t in range(T):
                 phi = self.Phi(x, y, neurons, beta, criterion)
-                init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
-                grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=False)
+                grads = torch.autograd.grad(phi, neurons, grad_outputs=self.init_grads, create_graph=False)
 
                 for idx in range(len(neurons)-1):
                     neurons[idx] = self.activation( grads[idx] )
@@ -419,6 +418,8 @@ class lat_CNN(P_CNN):
             # we *REMOVE* the output layer from the system
             for idx in range(len(self.fc) - 1):
                 append(torch.zeros((mbs, self.fc[idx]), requires_grad=True, device=device))            
+
+        self.init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
           
         return neurons
     

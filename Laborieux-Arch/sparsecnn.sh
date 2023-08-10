@@ -5,10 +5,10 @@ python ../main.py \
     --competitiontype 'feature_inner_products' \
     --inhibitstrength 1.0 \
     --sparse-layers -2 -1 \
-    --lambdas 0.0 0.5 \
+    --lambdas 0.0 1e-5 \
     --train-lat \
     --comp-syn-constraints 'zerodiag,transposesymmetric' 'zerodiag,transposesymmetric' \
-    --lat-lrs 0.1 0.5 \
+    --lat-lrs 0.04 0.01 \
     --channels 128 256 512 512 \
     --kernels 3 3 3 3 \
     --pools 'mmmm' \
@@ -32,4 +32,4 @@ python ../main.py \
     --data-aug \
     --device 0 \
     --seed $1 \
-
+    --save \

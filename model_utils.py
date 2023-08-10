@@ -1344,16 +1344,22 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 neurons = model.init_neurons(mbs, device)
                 l2s = [[] for i in range(len(neurons))]
                 for t in range(T1):
-                    lastnuerons = copy(neurons)
+                    lastneurons = copy(neurons)
                     neurons = model(x, y, neurons, 1, beta=beta_1, criterion=criterion)
+                    [l2s[idx].append((neurons[idx]-lastneurons[idx]).norm(2).item()) for idx in range(len(l2s))]
+                for t in range(T2):
+                    lastneurons = copy(neurons)
+                    neurons = model(x, y, neurons, 1, beta=beta_2, criterion=criterion)
                     [l2s[idx].append((neurons[idx]-lastneurons[idx]).norm(2).item()) for idx in range(len(l2s))]
                 N = len(neurons)
                 fig = plt.figure(figsize=(3*N,6))
                 for idx in range(N):
                     fig.add_subplot(2, N//2+1, idx+1)
-                    plt.plot(range(T1), l2s[idx])
+                    plt.plot(range(T1+T2), l2s[idx])
                     plt.title('L2 change in neurons of layer '+str(idx+1))
                     plt.xlabel('time step')
+                    plt.yscale('log')
+                    plt.axvline(x=T1, linestyle=':')
                 fig.savefig(path + '/neural_equilibrating.png')
                 plt.close()
                     

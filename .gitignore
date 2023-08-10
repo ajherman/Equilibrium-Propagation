@@ -12,6 +12,8 @@ results/
 *.zip
 **/*.zip
 **/*.jld2
+__MACOSX/
+**/__MACOSX/
 __pycache__/
 cifar10_pytorch/
 mnist_pytorch/
