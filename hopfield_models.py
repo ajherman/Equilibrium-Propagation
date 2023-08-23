@@ -262,7 +262,7 @@ class RevLatCNN(Reversible_CNN, lat_CNN, torch.nn.Module):
         return phi
 
 
-# absolute disgusting kludge. why do I have to do this in pytorch
+# absolute disgusting kludge. why do I have to do this in pytorch just to use JIT with cuda
 # add ModuleInterface
 @torch.jit.interface
 class ModuleInterface(torch.nn.Module):
@@ -516,3 +516,5 @@ class HopfieldCNN(RevLatCNN):
     #        self.unpooldata[idx] = torch.tensor([], device=device)
 
     #    return neurons
+
+

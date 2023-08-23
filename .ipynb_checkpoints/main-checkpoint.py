@@ -91,8 +91,6 @@ parser.add_argument('--figs', default = False, action='store_true', help='plot a
 parser.add_argument('--jit', default = False, action = 'store_true', help='use torch.jit trace and script to try to optimize the code for CUDA')
 parser.add_argument('--cpu', default = False, action = 'store_true', help='use CPU rather than CUDA')
 
-parser.add_argument('--noise', type=float, default = 0.0,  help='standard deviation of guassian noise added to training data')
-
 args = parser.parse_args()
 command_line = ' '.join(sys.argv)
 
@@ -116,7 +114,6 @@ if args.save:
         path = args.load_path
     if not(os.path.exists(path)):
         os.makedirs(path)
-    print('---------- saving at {} --------------'.format(path))
 else:
     path = ''
 
@@ -150,14 +147,11 @@ elif args.task=='CIFAR10':
                                                           torchvision.transforms.RandomCrop(size=[32,32], padding=4, padding_mode='edge'),
                                                           torchvision.transforms.ToTensor(), 
                                                           torchvision.transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), 
-                                                                                           std=(3*0.2023, 3*0.1994, 3*0.2010)) ])
+                                                                                           std=(3*0.2023, 3*0.1994, 3*0.2010)) ])   
     else:
          transform_train = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), 
                                                           torchvision.transforms.Normalize(mean=(0.4914, 0.4822, 0.4465), 
                                                                                            std=(3*0.2023, 3*0.1994, 3*0.2010)) ])   
-    if args.noise > 0.0:
-        transform_train = torchvision.transforms.Compose([transform_train, AddGaussianNoise(0.0, args.noise)])
-
     if args.todo=='attack':
         transform_test = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
     else:
@@ -241,11 +235,11 @@ if args.load_path=='':
             model = fake_softmax_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                               activation=activation, competitiontype=args.competitiontype, lat_constraints=args.lat_constraints, 
                               inhibitstrength=args.inhibitstrength, softmax=False)
-        elif args.model=='SparseCodingCNN':
-            model = latCompCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
+        elif args.model=='SparseCNN':
+            model = sparseCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                               lat_layer_idxs=args.lat_layers, sparse_layer_idxs=args.sparse_layers, comp_syn_constraints = args.comp_syn_constraints,
                               competitiontype=args.competitiontype, lat_constraints=args.lat_constraints,
-                              inhibitstrength=args.inhibitstrength, activation=activation, softmax=args.softmax)#, layerlambdas=[args.lambdas[1] for _ in range(len(channels)+len(args.fc))])
+                              inhibitstrength=args.inhibitstrength, activation=activation, softmax=args.softmax)
         elif args.model=='ReversibleCNN':
             model = Reversible_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                               activation=activation, softmax=args.softmax)
@@ -270,50 +264,6 @@ if args.load_path=='':
                               activation=activation, softmax=args.softmax, dynamicsmomentum=0.5)
 
                        
-        if args.load_path_convert != '':
-            # initialize new weights as identity
-            def my_convert_init(m): # initialize new layers as identity, so model functions like original model
-                if isinstance(m, torch.nn.Linear):
-                    m.weight.data.copy_(torch.eye(m.weight.size(0), m.weight.size(1)))
-                    if m.bias is not None:
-                        m.bias.data.zero_()
-            model.synapses.apply(my_convert_init)
-            
-            # load source model
-            origmodel = torch.load(args.load_path_convert + '/model.pt', map_location=device)
-            # copy parameters
-            if len(args.convert_place_layers) == 0:
-                args.convert_place_layers = range(len(origmodel.synapses))
-            for i, idx in enumerate(args.convert_place_layers):
-                if idx != '-':
-                    idx = int(idx)
-                    model.synapses[idx] = origmodel.synapses[i]
-            #if origmodel.hasattr('lat_syn'):
-            #    if len(args.convert_place_lat_layers) == 0:
-            #        args.convert_place_lat_layers = range(len(origmodel.synapses))
-            #    model.lat_syn[args.convert_place_lat_layers] = origmodel.lat_syn
-
-            # modify lateral or tranposed layers if necessary based on sourced weights
-            if hasattr(model, 'postupdate'):
-                model.postupdate()
-        else:
-            if not(args.train_lateral) or args.lat_init_zeros:
-                if hasattr(model, 'lat_syn'):
-                    print("zeroing lateral layers")
-                    for l in model.lat_syn:
-                        l.weight.data = l.weight.data.zero_()
-                        if hasattr(l, 'bias') and l.bias is not None:
-                            l.bias.data = l.bias.data.zero_()
-                if hasattr(model, 'conv_lat_syn'):
-                    print("zeroing conv lateral layers")
-                    for l in model.conv_lat_syn:
-                        l.weight.data = l.weight.data.zero_()
-                        if hasattr(l, 'bias') and l.bias is not None:
-                            l.bias.data = l.bias.data.zero_()
-                elif args.model == 'Lat_MH_CNN':
-                    print("zeroing head lateral layers")
-                    model.head_hopfield.apply(torch.nn.init.zeros_)
-
         print('\n')
         print('Poolings =', model.pools)
 
@@ -321,6 +271,45 @@ if args.load_path=='':
         model.apply(my_init(args.scale))
 else:
     model = torch.load(args.load_path + '/model.pt', map_location=device)
+
+if args.load_path_convert != '':
+    # initialize new weights as identity
+    def my_convert_init(m): # initialize new layers as identity, so model functions like original model
+        if isinstance(m, torch.nn.Linear):
+            m.weight.data.copy_(torch.eye(m.weight.size(0), m.weight.size(1)))
+            if m.bias is not None:
+                m.bias.data.zero_()
+    model.synapses.apply(my_convert_init)
+    
+    # load source model
+    origmodel = torch.load(args.load_path_convert + '/model.pt', map_location=device)
+    # copy parameters
+    if len(args.convert_place_layers) == 0:
+        args.convert_place_layers = range(len(origmodel.synapses))
+    for i, idx in enumerate(args.convert_place_layers):
+        if idx != '-':
+            idx = int(idx)
+            model.synapses[idx] = origmodel.synapses[i]
+    #if origmodel.hasattr('lat_syn'):
+    #    if len(args.convert_place_lat_layers) == 0:
+    #        args.convert_place_lat_layers = range(len(origmodel.synapses))
+    #    model.lat_syn[args.convert_place_lat_layers] = origmodel.lat_syn
+
+    # modify lateral or tranposed layers if necessary based on sourced weights
+    if hasattr(model, 'updatetranspose'):
+        model.updatetranspose()
+
+
+if not(args.train_lateral) or args.lat_init_zeros:
+    if hasattr(model, 'lat_syn'):
+        print("zeroing lateral layers")
+        for l in model.lat_syn:
+            l.weight.data = l.weight.data.zero_()
+            if hasattr(l, 'bias'):
+                l.bias.data = l.bias.data.zero_()
+    elif args.model == 'Lat_MH_CNN':
+        print("zeroing head lateral layers")
+        model.head_hopfield.apply(torch.nn.init.zeros_)
 
 model.to(device)
 print(model)
@@ -356,21 +345,7 @@ if args.todo=='train':
                 optim_params.append( {'params': model.head_encoders[idx].parameters(), 'lr': args.head_lrs[idx], 'weight_decay': args.head_wds[idx+1]} )
     print('trian lat?', args.train_lateral, hasattr(model, 'lat_syn'))
     if args.train_lateral:
-        if hasattr(model, 'conv_lat_syn'):
-            print('adding lateral synapses to optimizer')
-            for idx in range(len(model.conv_lat_syn)):
-                if args.wds is None:
-                    optim_params.append( {'params': model.conv_lat_syn[idx].parameters(), 'lr': args.lat_lrs[idx]} )
-                else:
-                    optim_params.append( {'params': model.conv_lat_syn[idx].parameters(), 'lr': args.lat_lrs[idx], 'weight_decay': args.lat_wds[idx]} )
-            conv_lat_len = idx
-            for j in range(len(model.lat_syn)):
-                idx = conv_lat_len+j
-                if args.wds is None:
-                    optim_params.append( {'params': model.lat_syn[j].parameters(), 'lr': args.lat_lrs[idx]} )
-                else:
-                    optim_params.append( {'params': model.lat_syn[j].parameters(), 'lr': args.lat_lrs[idx], 'weight_decay': args.lat_wds[idx]} )
-        elif hasattr(model, 'lat_syn'):
+        if hasattr(model, 'lat_syn'):
             print('adding lateral synapses to optimizer')
             for idx in range(len(model.lat_syn)):
                 if args.wds is None:
@@ -389,7 +364,7 @@ if args.todo=='train':
     elif args.optim=='adam':
         optimizer = torch.optim.Adam( optim_params )
 
-    if model.__class__.__name__ == 'sparseCNN' and args.train_lateral:
+    if isinstance(model, sparseCNN):
         model.lambdas = args.lambdas
         
         sparse_op = []

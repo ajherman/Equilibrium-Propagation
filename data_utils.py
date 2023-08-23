@@ -131,7 +131,7 @@ def plot_gdu(BPTT, EP, path, EP_2=None, alg='EP'):
 
 
         
-def plot_neural_activity(neurons, path):   
+def plot_neural_activity(neurons, path, suff=''):   
     N = len(neurons)
     fig = plt.figure(figsize=(3*N,6))
     for idx in range(N):
@@ -139,7 +139,7 @@ def plot_neural_activity(neurons, path):
         nrn = neurons[idx].cpu().detach().numpy().flatten()
         plt.hist(nrn, 50)
         plt.title('neurons of layer '+str(idx+1))
-    fig.savefig(path + '/neural_activity.png')
+    fig.savefig(path + '/neural_activity{}.png'.format(suff))
     plt.close()
 
 
@@ -215,7 +215,15 @@ def createHyperparametersFile(path, args, model, command_line):
 
 
 
-
-
+class AddGaussianNoise(object):
+    def __init__(self, mean=0., std=1.):
+        self.std = std
+        self.mean = mean
+        
+    def __call__(self, tensor):
+        return tensor + torch.randn(tensor.size()) * self.std + self.mean
+    
+    def __repr__(self):
+        return self.__class__.__name__ + '(mean={0}, std={1})'.format(self.mean, self.std)
 
  

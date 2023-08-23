@@ -1199,6 +1199,11 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
     return tot_correct/nbatches/mbs, tot_correct_adv/nbatches/mbs, adv_examples, preds, preds_adv
 
         
+def hebbian_syn_grads(model, x, neurons, criterion, coeff=1):
+    model.zero_grad()
+    phi = model.Phi(x, torch.tensor([]), neurons, beta=0, criterion=criterion)
+    (-coeff*phi.sum()).backward()
+
 def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs, criterion, alg='EP', 
           random_sign=False, save=False, check_thm=False, path='', checkpoint=None, thirdphase = False, scheduler=None, cep_debug=False, tensorboard=False):
     
@@ -1251,23 +1256,29 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
     masktransform = torchvision.transforms.Compose([
                                       torchvision.transforms.RandomCrop(size=model.in_size, padding=model.in_size//2, padding_mode='constant'),
                                   ])
-    reconstructfreq = 5 # train reconstruct on 1 of x batches
-    isreconstructmodel = False # disable reconstruction trianing
+    reconstructfreq = 1 # train reconstruct on 1 of x batches
+    minreconstructepoch = 0
+    maxreconstructepoch = 1
+    #isreconstructmodel = issubclass(model.__class__, ReversibleCNN) #False # disable reconstruction trianing
 
     for epoch in range(epochs):
         run_correct = 0
         run_total = 0
         recon_err = 0
         model.train()
-        print(model.forward)
 
         if hasattr(model, 'postupdate'):
             model.postupdate()
         if hasattr(model, 'lat_syn'):
-            print('lat weight L1 norms', [l.weight.norm(1) for l in model.lat_syn])
+            print('lat weight dims', [l.weight.size() for l in model.lat_syn])
+            print('lat weight L1 norms', [l.weight.norm(1).item() for l in model.lat_syn])
             if len(model.lat_syn) > 0:
                 print(model.lat_syn[-1].weight[0:10,0:10])
-                print(model.lat_syn[-1].bias[0:10])
+        if hasattr(model, 'conv_lat_syn'):
+            print('conv lat weight dims', [l.weight.size() for l in model.conv_lat_syn])
+            print('conv lat weight L1 norms', [l.weight.norm(1).item() for l in model.conv_lat_syn])
+            if len(model.conv_lat_syn) > 0:
+                print(model.conv_lat_syn[0].weight[0,0,:,:])
         if hasattr(model, 'conv_comp_layers'):
             print('convolutional competition kernel L1 norms', [l.weight.norm(1) for l in model.conv_comp_layers])
             if len(model.conv_comp_layers) > 0:
@@ -1278,44 +1289,132 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
             if len(model.fc_comp_layers) > 0:
                 print(model.fc_comp_layers[-1].weight[0:10,0:10])
                 print(model.fc_comp_layers[-1].bias[0:10])
+        print('synapse L2 norms', [l.weight.norm(2).item() for l in model.synapses])
+        print('bias L1 norms', [l.bias.norm(1).item() for l in model.synapses])
         print('final forward fc bias', model.synapses[-1].bias)
+
 
         for idx, (x, y) in enumerate(train_loader):
             x, y = x.to(device), y.to(device)
             mbs = x.size(0)
-            #if alg=='CEP' and cep_debug:
-            #    x = x.double()            
-            reconstruct = isreconstructmodel and int(idx%reconstructfreq) == 0
-    
+
             neurons = model.init_neurons(mbs, device)
+
+            #if alg=='CEP' and cep_debug:
+            #    x = x.double() 
+            reconstruct = isreconstructmodel and int(idx%reconstructfreq) == 0 and epoch >= minreconstructepoch and epoch < maxreconstructepoch
+    
             if reconstruct:
                 # results in a zero and one mask used to select which indexes of the input to fully clamp.
                 # The zeros (the padding included in the randomcrop) are where it will reconstruct the output
-                #reconstructmask = masktransform(torch.ones_like(x)).bool()
                 reconstructmask = torch.stack([masktransform(torch.ones_like(x[0])) for i in range(mbs)])
                 model.fullclamping[0] = reconstructmask.bool()
                 classifyalso = torch.rand((1,)).item() < 0.4 # this percent of the time, simulataneoulsy nudge the classification
                 model.mode(trainclassifier=classifyalso, trainreconstruct=True)
-                # select random size window (of at least size 1/2 by 1/2) and location (that fits the window) to clamp on the input
-                #clampwindowsize = torch.rand((mbs,2))*1/2 + 1/2
-                #clampwindowtr = torch.rand((mbs,2))*(1-clampwindowsize)
-                #clampwindowsize = (clampwindowsize*model.in_size).int()
-                #clampwindowtr = (clampwindowtr*model.in_size).int()
-                #model.fullclamping[0] =[ [(i, clampwindowtr[i,0].item(),
-                #                             clampwindowtr[i,1].item()) for i in range(mbs-1)],
-                #    [(i, clampwindowtr[i,0].item()+clampwindowsize[i,0].item(),
-                #         clampwindowtr[i,1].item()+clampwindowsize[i,1].item()) for i in range(mbs-1)] ]
+
+
+                if model.__class__.__name__ == 'sparseCNN' :#torch.rand((1,)).item() < 0.1:
+                    model.mode(trainclassifier=False, trainreconstruct=True)
+                    #if alg == 'EP': # rather than nudging output, impose L1 penalty to nudge for sparsity
+                    #    with torch.no_grad():
+                    #        for layer in model.conv_comp_layers: # L1 penalty is equivelant to subtracting lambda from biases
+                    #            layer.bias -= model.lambdas[1]
+                    #    
+                    #    neurons = model(x, y, neurons, T1, beta=beta_1, criterion=criterion)
+                    #    neurons_1 = copy(neurons)
+
+                    #    neurons = model(x, y, neurons, T2, beta = beta_2, criterion=criterion)
+                    #    neurons_2 = copy(neurons)
+
+                    #    # reset to normal weights
+                    #    with torch.no_grad():
+                    #        for layer in model.conv_comp_layers:
+                    #            layer.bias += model.lambdas[1]
+
+                    #    # Third phase (if we approximate f' as f'(x) = (f(x+h) - f(x-h))/2h)
+                    #    if thirdphase:
+                    #        # anti-nudge: promote non-sparsity with more positive biases
+                    #        with torch.no_grad():
+                    #            for layer in model.conv_comp_layers:
+                    #                layer.bias += model.lambdas[1]
+                    #        #come back to the first equilibrium
+                    #        neurons = copy(neurons_1)
+                    #        neurons = model(x, y, neurons, T2, beta=-beta_2, criterion=criterion)
+                    #        neurons_3 = copy(neurons)
+                    #        # reset bias values
+                    #        with torch.no_grad():
+                    #            for layer in model.conv_comp_layers:
+                    #                layer.bias -= model.lambdas[1]
+                    #        #if not(isinstance(model, VF_CNN)):
+                    #        model.compute_syn_grads_sparsity(x, y, neurons_2, neurons_3, beta_1, (model.lambdas[1], -model.lambdas[1]), criterion)
+                    #    else:
+                    #        model.compute_syn_grads_sparsity(x, y, neurons_1, neurons_2, beta_1, model.lambdas, criterion)
+
+                    #    model.sparse_optim.step()
+                    #    if hasattr(model, 'postupdate'):
+                    #        model.postupdate()
+                    #    
+                    #    print('\tsparse nudge:')
+                    #    print('\t\tneurons_1 L1', [(neurons_1[layeridx]).norm(1).item() for layeridx in range(len(neurons_1))])
+                    #    print('\t\tneurons_2 L1', [(neurons_2[layeridx]).norm(1).item() for layeridx in range(len(neurons_1))])
+                    #    if thirdphase:
+                    #        print('\t\tneurons_3 L1', [(neurons_3[layeridx]).norm(1).item() for layeridx in range(len(neurons_1))])
+                    #        print('\t\tneurons_2-neurons_3 L2', [(neurons_2[layeridx]-neurons_3[layeridx]).norm(2).item() for layeridx in range(len(neurons_1))])
+                    #    print('\t\tneurons_1-neurons_2 L2', [(neurons_2[layeridx]-neurons_1[layeridx]).norm(2).item() for layeridx in range(len(neurons_1))])
+                    #    print('\tsparse lat fc connections :', model.fc_comp_layers[-1].weight.cpu().detach())
+                    #    print('\tsparse lat fc connections bias:', model.fc_comp_layers[-1].bias.cpu().detach())
+                    #    print('\tsparse lat conv connections bias:', model.conv_comp_layers[-1].bias.cpu().detach())
+
+                    #    continue
+                    
             elif isreconstructmodel:
                 model.mode(trainclassifier=True, trainreconstruct=False)
                 model.fullclamping[0].fill_(True)
+
+                        
+            # run sparse training step
+            #if isinstance(model, sparseCNN):
+            #    if torch.rand((1,)).item() < 0.2: # train sparsity for 20% of batches
+            #        #model.train_sparsity_EP(x, y, T, thirdphase=thirdphase)
+            #        if alg == 'EP':
+            #            neurons = copy(neurons_1)
+            #            model.lambda_val = model.lambdas[1]
+            #            neurons = model(x, y, T2, beta=beta_1, criterion=criterion)
+            #        model.lambda_val = model.lambdas[0]
         
 
-            if alg=='EP' or alg=='CEP':
+            if alg=='EP' or alg=='CEP' or alg=="HebUnsupervised":
                 # First phase
+
                 neurons = model(x, y, neurons, T1, beta=beta_1, criterion=criterion)
-                #print('n-1', neurons[-1].sum())
-                #print('n0', (neurons[0] - x).sum())
                 neurons_1 = copy(neurons)
+                if alg == 'HebUnsupervised':
+                    hebbian_syn_grads(model, x, neurons, criterion)
+                    optimizer.step()
+
+                    # anti-update with random noise
+                    #"""
+                    x_rand = torch.randn_like(x) * torch.var(x) + x.mean()
+                    neurons = model.init_neurons(mbs, device)
+                    neurons = model(x_rand, torch.tensor([]), neurons, T1, beta=0, criterion=criterion)
+                    hebbian_syn_grads(model, x_rand, neurons, criterion, coeff=-0.01)
+                    optimizer.step()
+
+                    # project the weights so each feature has norm 1
+                    with torch.no_grad():
+                        for idx in range(len(model.synapses)):
+                            if isinstance(model.synapses[idx], torch.nn.Conv2d):
+                                model.synapses[idx].weight.data /= model.synapses[idx].weight.data.norm(2, dim=(1,2,3))[:,None,None,None]
+                            elif isinstance(model.synapses[idx], torch.nn.Linear):
+                                model.synapses[idx].weight.data /= model.synapses[idx].weight.data.norm(2, dim=1)[:,None]
+                            #model.synapses[idx].bias.fill_(0.0)#-0.1)
+    
+                    print('synapse L2 norms', [l.weight.norm(2).item() for l in model.synapses])
+                    print('bias L1 norms', [l.bias.norm(1).item() for l in model.synapses])
+                    print('final forward fc bias', model.synapses[-1].bias)
+                    print('neuron L1', [n.norm(1) for n in neurons_1])
+                    print('neuron size', [n.size() for n in neurons_1])
+                    #"""
             elif alg=='BPTT':
                 neurons = model(x, y, neurons, T1-T2, beta=0.0, criterion=criterion)           
                 # detach data and neurons from the graph
@@ -1337,31 +1436,6 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
 
                 run_correct += (y == pred).sum().item()
                 run_total += mbs # x.size(0)
-            if ((idx%(iter_per_epochs//10)==0) or (idx==iter_per_epochs-1)) and save:
-                plot_neural_activity(neurons, path)
-
-                # plot how much the neurons are changing to know when it equilibrates
-                neurons = model.init_neurons(mbs, device)
-                l2s = [[] for i in range(len(neurons))]
-                for t in range(T1):
-                    lastneurons = copy(neurons)
-                    neurons = model(x, y, neurons, 1, beta=beta_1, criterion=criterion)
-                    [l2s[idx].append((neurons[idx]-lastneurons[idx]).norm(2).item()) for idx in range(len(l2s))]
-                for t in range(T2):
-                    lastneurons = copy(neurons)
-                    neurons = model(x, y, neurons, 1, beta=beta_2, criterion=criterion)
-                    [l2s[idx].append((neurons[idx]-lastneurons[idx]).norm(2).item()) for idx in range(len(l2s))]
-                N = len(neurons)
-                fig = plt.figure(figsize=(3*N,6))
-                for idx in range(N):
-                    fig.add_subplot(2, N//2+1, idx+1)
-                    plt.plot(range(T1+T2), l2s[idx])
-                    plt.title('L2 change in neurons of layer '+str(idx+1))
-                    plt.xlabel('time step')
-                    plt.yscale('log')
-                    plt.axvline(x=T1, linestyle=':')
-                fig.savefig(path + '/neural_equilibrating.png')
-                plt.close()
                     
             
             if alg=='EP':
@@ -1450,72 +1524,14 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 loss.backward()
                 optimizer.step()
 
-            if model.__class__.__name__ == 'sparseCNN' and torch.rand((1,)).item() < 0.1:
-                if alg == 'EP': # rather than nudging output, impose L1 penalty to nudge for sparsity
-                    with torch.no_grad():
-                        for layer in model.conv_comp_layers: # L1 penalty is equivelant to subtracting lambda from biases
-                            layer.bias -= model.lambdas[1]
-                    
-                    neurons = copy(neurons_1)
-                    neurons = model(x, y, neurons, T2, beta = beta_1, criterion=criterion)
-                    neurons_2 = copy(neurons)
-
-                    # reset to normal weights
-                    with torch.no_grad():
-                        for layer in model.conv_comp_layers:
-                            layer.bias += model.lambdas[1]
-
-                    # Third phase (if we approximate f' as f'(x) = (f(x+h) - f(x-h))/2h)
-                    if thirdphase:
-                        # anti-nudge: promote non-sparsity with more positive biases
-                        with torch.no_grad():
-                            for layer in model.conv_comp_layers:
-                                layer.bias += model.lambdas[1]
-                        #come back to the first equilibrium
-                        neurons = copy(neurons_1)
-                        neurons = model(x, y, neurons, T2, beta=beta_1, criterion=criterion)
-                        neurons_3 = copy(neurons)
-                        # reset bias values
-                        with torch.no_grad():
-                            for layer in model.conv_comp_layers:
-                                layer.bias -= model.lambdas[1]
-                        #if not(isinstance(model, VF_CNN)):
-                        model.compute_syn_grads_sparsity(x, y, neurons_2, neurons_3, beta_1, (model.lambdas[1], -model.lambdas[1]), criterion)
-                    else:
-                        model.compute_syn_grads_sparsity(x, y, neurons_1, neurons_2, beta_1, model.lambdas, criterion)
-
-                    model.sparse_optim.step()
-                    if hasattr(model, 'postupdate'):
-                        model.postupdate()
-                    
-                    print('\tsparse nudge:')
-                    print('\t\tneurons_1 L1', [(neurons_1[idx]).norm(1).item() for idx in range(len(neurons_1))])
-                    print('\t\tneurons_2 L1', [(neurons_2[idx]).norm(1).item() for idx in range(len(neurons_1))])
-                    if thirdphase:
-                        print('\t\tneurons_3 L1', [(neurons_3[idx]).norm(1).item() for idx in range(len(neurons_1))])
-                        print('\t\tneurons_2-neurons_3 L2', [(neurons_2[idx]-neurons_3[idx]).norm(2).item() for idx in range(len(neurons_1))])
-                    print('\t\tneurons_1-neurons_2 L2', [(neurons_2[idx]-neurons_1[idx]).norm(2).item() for idx in range(len(neurons_1))])
-                    print('\tsparse lat fc connections :', model.fc_comp_layers[-1].weight.cpu().detach())
-                    print('\tsparse lat fc connections bias:', model.fc_comp_layers[-1].bias.cpu().detach())
-                    print('\tsparse lat conv connections bias:', model.conv_comp_layers[-1].bias.cpu().detach())
-                
-                        
-            # run sparse training step
-            #if isinstance(model, sparseCNN):
-            #    if torch.rand((1,)).item() < 0.2: # train sparsity for 20% of batches
-            #        #model.train_sparsity_EP(x, y, T, thirdphase=thirdphase)
-            #        if alg == 'EP':
-            #            neurons = copy(neurons_1)
-            #            model.lambda_val = model.lambdas[1]
-            #            neurons = model(x, y, T2, beta=beta_1, criterion=criterion)
-            #        model.lambda_val = model.lambdas[0]
 
             if ((idx%(iter_per_epochs//10)==0) or (idx==iter_per_epochs-1)):
                 run_acc = run_correct/run_total
                 print('Epoch :', round(epoch_sofar+epoch+(idx/iter_per_epochs), 2),
                       '\tRun train acc :', round(run_acc,3),'\t('+str(run_correct)+'/'+str(run_total)+')\t',
                       timeSince(start, ((idx+1)+epoch*iter_per_epochs)/(epochs*iter_per_epochs)))
-                print('\tL2 neurons_1-neurons_2 : ', [(neurons_1[idx]-neurons_2[idx]).norm(2).item() for idx in range(len(neurons_1))])
+                if alg == 'EP' or alg == 'CEP':
+                    print('\tL2 neurons_1-neurons_2 : ', [(neurons_1[idx]-neurons_2[idx]).norm(2).item() for idx in range(len(neurons_1))])
                 if thirdphase:
                     print('\tL2 neurons_1-neurons_3 : ', [(neurons_1[idx]-neurons_3[idx]).norm(2).item() for idx in range(len(neurons_1))])
                     print('\tL2 neurons_2-neurons_3 : ', [(neurons_2[idx]-neurons_3[idx]).norm(2).item() for idx in range(len(neurons_1))])
@@ -1528,12 +1544,12 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     BPTT, EP = check_gdu(model, x[0:5,:], y[0:5], T1, T2, betas, criterion, alg=alg)
                     RMSE(BPTT, EP)
 
-            im = lambda t: (t*255).to(torch.uint8)
             if reconstruct:
                 recon_err = (- (x - neurons[0]).norm(2)).data.item()
 
                 if tensorboard:
                     batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
+                    im = lambda t: (t*255).to(torch.uint8)
 
                     img_grid = torchvision.utils.make_grid(im((x*model.fullclamping[0])[:16].data.cpu()))
                     # matplotlib_imshow(img_grid, one_channel=True)
@@ -1606,6 +1622,46 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 torch.save(save_dic,  path + '/best_checkpoint.tar')
                 torch.save(model, path + '/best_model.pt')
             plot_acc(train_acc, test_acc, path)        
+
+            #if save: #((idx%(iter_per_epochs//10)==0) or (idx==iter_per_epochs-1)) and save:
+            # plot how much the neurons are changing to know when it equilibrates
+            neurons = model.init_neurons(mbs, device)
+            l2s = [[] for i in range(len(neurons))]
+            phis = []
+            for t in range(T1):
+                lastneurons = copy(neurons)
+                neurons = model(x, y, neurons, 1, beta=beta_1, criterion=criterion)
+                [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
+                phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
+            # also plot histogram of neuron values
+            plot_neural_activity(neurons, path, suff=epoch)
+            for t in range(T2):
+                lastneurons = copy(neurons)
+                neurons = model(x, y, neurons, 1, beta=beta_2, criterion=criterion)
+                [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
+                phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
+            plot_neural_activity(neurons, path, suff=str(epoch)+'_nudged')
+            N = len(neurons)
+            fig = plt.figure(figsize=(3*N,6))
+            for layeridx in range(N):
+                fig.add_subplot(2, N//2+1, layeridx+1)
+                plt.plot(range(T1+T2), l2s[layeridx])
+                plt.title('L2 change in neurons of layer '+str(layeridx+1))
+                plt.xlabel('time step')
+                plt.yscale('log')
+                plt.axvline(x=T1, linestyle=':')
+            fig.savefig(path + '/neural_equilibrating_{}.png'.format(epoch_sofar+epoch))
+            plt.close()
+
+            fig = plt.figure()
+            plt.plot(range(T1+T2), phis)
+            plt.title('Energy Function (Phi) over Model Dynamics Evolution')
+            plt.xlabel('time step')
+            plt.ylabel('energy')
+            plt.axvline(x=T1, linestyle=':')
+            plt.tight_layout()
+            fig.savefig(path + '/phi_evolution_{}.png'.format(epoch_sofar+epoch))
+            plt.close()
     
     if save:
         save_dic = {'model_state_dict': model.state_dict(), 'opt': optimizer.state_dict(),

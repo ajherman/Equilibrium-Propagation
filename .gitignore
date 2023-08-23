@@ -2,8 +2,8 @@
 **/*.zip
 *.json
 runs/
-results/
 **/runs/
+results/
 **/results/
 **/*.pt
 **/*.tar

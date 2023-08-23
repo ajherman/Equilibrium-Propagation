@@ -4,11 +4,9 @@ python ../main.py \
     --task 'CIFAR10' \
     --competitiontype 'feature_inner_products' \
     --inhibitstrength 1.0 \
-    --sparse-layers -2 -1 \
-    --lambdas 0.0 1e-5 \
-    --train-lat \
-    --comp-syn-constraints 'zerodiag,transposesymmetric' 'zerodiag,transposesymmetric' \
-    --lat-lrs 0.004 0.001 \
+    --sparse-layers -5 -4 -3 -2 -1 \
+    --lambdas 0.0 0.01 \
+    --comp-syn-constraints 'zerodiag,transposesymmetric' 'zerodiag,transposesymmetric' 'zerodiag,transposesymmetric' 'zerodiag,transposesymmetric' 'zerodiag,transposesymmetric' \
     --channels 128 256 512 512 \
     --kernels 3 3 3 3 \
     --pools 'mmmm' \
@@ -33,3 +31,4 @@ python ../main.py \
     --device 0 \
     --seed $1 \
     --save \
+    --tensorboard \
