@@ -1,9 +1,11 @@
 #!/bin/sh
 python ../main.py \
-    --model 'SparseCNN' \
+    --model 'SparseCodingCNN' \
     --task 'CIFAR10' \
     --competitiontype 'feature_inner_products' \
-    --inhibitstrength 1.0 \
+    --sparse-layers -5 \
+    --inhibitstrength $1 \
+    --lambdas $2 \
     --channels 128 256 512 512 \
     --kernels 3 3 3 3 \
     --pools 'mmmm' \
@@ -18,7 +20,7 @@ python ../main.py \
     --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
     --act 'my_hard_sig' \
     --todo 'train' \
-    --betas 0.0 0.005 \
+    --betas 0.0 0.5 \
     --thirdphase \
     --T1 250 \
     --T2 25 \

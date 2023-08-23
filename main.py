@@ -64,7 +64,7 @@ parser.add_argument('--cep-debug', default = False, action = 'store_true', help=
 parser.add_argument('--train-lateral', default = False, action = 'store_true', help='whether to enable the lateral/hopfield interactions (default: False)')
 parser.add_argument('--lat-layers', nargs='+', type = int, default = [], help='index of layers to add lateral connections to (ex: 0 1 -1) to add lateral interactions to first and second layer, last layer')
 parser.add_argument('--lat-kernels', nargs='+', type = int, default = [], help='kernel size of convolutional lateral interaction. Must be odd numbers. Should have length equal to the number of --lat-layers indexes which have a convolutional input. Other layer indexes will be fully connected (like their input). For use with LatConvCNN')
-parser.add_argument('--sparse-layers', nargs='+', type = int, default = [], help='index of layers to add lateral connections to trained to make the neurons sparse (via an L1 penalty with coeffecient lambdas[1])')
+parser.add_argument('--sparse-layers', nargs='+', type = int, default = [], help='index of layers to add lateral connections (--competition-type) to, and a fixed bias of -(--lambdas)')
 parser.add_argument('--lat-constraints', nargs='+', type = str, default = [], metavar = 'lc', help='constraints to impose to lateral connections (layer-wise). e.g. `--lat-constraints zerodiag transposesymmetric+negReLu none` to zero the diagonal (self-interactions) of the first lateral layer in the model, and ensure the second layer is a symmetric matrix with only negative values (this combines two possible constraints).')
 parser.add_argument('--comp-syn-constraints', nargs='+', type = str, default = [], metavar = 'lc', help='constraints to impose on competitive sparsifying lateral connections (layer-wise). e.g. `--lat-constraints zerodiag transposesymmetric+negReLu none` to zero the diagonal (self-interactions) of the first lateral layer in the model, and ensure the second layer is a symmetric matrix with only negative values (this combines two possible constraints).')
 parser.add_argument('--competitiontype', type = str, default = 'none', metavar = 'ct', help='(LatSoftCNN) type of lateral inhibition to apply in output classification layer (feature_inner_products or uniform_inhbition). will be scaled by --inhibitstrength')
@@ -81,7 +81,8 @@ parser.add_argument('--convert-place-layers', nargs='+', type = str, default = [
 
 parser.add_argument('--tensorboard', default = False, action = 'store_true', help='write data to tensorboard for viewing while training')
 
-parser.add_argument('--lambdas', nargs='+', type = float, default=[], help='sparse coding coeffecient for free phase and nudged phase.')
+parser.add_argument('--lambdas', nargs='+', type = float, default=[], help='(sparse-)layer-wise fixed value for negative bias. Equivelant to L1 penalty on neurons scaled by this.')
+parser.add_argument('--nudge-lambda', nargs='+', type = float, default=[], help='impose L1 penalty in nudged phase with this coefficient, to train for sparsity with EP')
 
 parser.add_argument('--eps', nargs='+', type = float, default = [], metavar = 'e', help='epsilon values to use for PGD attack (--todo attack)')
 parser.add_argument('--mbs-test',type = int, default = 200, metavar = 'M', help='minibatch size for test set (can be larger since during testing grads need not be calculated)')
@@ -245,7 +246,7 @@ if args.load_path=='':
             model = latCompCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                               lat_layer_idxs=args.lat_layers, sparse_layer_idxs=args.sparse_layers, comp_syn_constraints = args.comp_syn_constraints,
                               competitiontype=args.competitiontype, lat_constraints=args.lat_constraints,
-                              inhibitstrength=args.inhibitstrength, activation=activation, softmax=args.softmax)#, layerlambdas=[args.lambdas[1] for _ in range(len(channels)+len(args.fc))])
+                              inhibitstrength=args.inhibitstrength, activation=activation, softmax=args.softmax, layerlambdas=args.lambdas)
         elif args.model=='ReversibleCNN':
             model = Reversible_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                               activation=activation, softmax=args.softmax)

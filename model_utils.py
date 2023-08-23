@@ -1297,6 +1297,46 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
         for idx, (x, y) in enumerate(train_loader):
             x, y = x.to(device), y.to(device)
             mbs = x.size(0)
+    
+            if ((idx%(iter_per_epochs//2)==0) or (idx==iter_per_epochs-1)) and save:
+                # plot how much the neurons are changing to know when it equilibrates
+                neurons = model.init_neurons(mbs, device)
+                l2s = [[] for i in range(len(neurons))]
+                phis = []
+                for t in range(T1):
+                    lastneurons = copy(neurons)
+                    neurons = model(x, y, neurons, 1, beta=beta_1, criterion=criterion)
+                    [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
+                    phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
+                # also plot histogram of neuron values
+                plot_neural_activity(neurons, path, suff=epoch)
+                for t in range(T2):
+                    lastneurons = copy(neurons)
+                    neurons = model(x, y, neurons, 1, beta=beta_2, criterion=criterion)
+                    [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
+                    phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
+                plot_neural_activity(neurons, path, suff=str(epoch)+'_nudged')
+                N = len(neurons)
+                fig = plt.figure(figsize=(3*N,6))
+                for layeridx in range(N):
+                    fig.add_subplot(2, N//2+1, layeridx+1)
+                    plt.plot(range(T1+T2), l2s[layeridx])
+                    plt.title('L2 change in neurons of layer '+str(layeridx+1))
+                    plt.xlabel('time step')
+                    plt.yscale('log')
+                    plt.axvline(x=T1, linestyle=':')
+                fig.savefig(path + '/neural_equilibrating_{}.png'.format(epoch_sofar+epoch))
+                plt.close()
+
+                fig = plt.figure()
+                plt.plot(range(T1+T2), phis)
+                plt.title('Energy Function (Phi) over Model Dynamics Evolution')
+                plt.xlabel('time step')
+                plt.ylabel('energy')
+                plt.axvline(x=T1, linestyle=':')
+                plt.tight_layout()
+                fig.savefig(path + '/phi_evolution_{}.png'.format(epoch_sofar+epoch))
+                plt.close()
 
             neurons = model.init_neurons(mbs, device)
 
@@ -1623,45 +1663,6 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 torch.save(model, path + '/best_model.pt')
             plot_acc(train_acc, test_acc, path)        
 
-            #if save: #((idx%(iter_per_epochs//10)==0) or (idx==iter_per_epochs-1)) and save:
-            # plot how much the neurons are changing to know when it equilibrates
-            neurons = model.init_neurons(mbs, device)
-            l2s = [[] for i in range(len(neurons))]
-            phis = []
-            for t in range(T1):
-                lastneurons = copy(neurons)
-                neurons = model(x, y, neurons, 1, beta=beta_1, criterion=criterion)
-                [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
-                phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
-            # also plot histogram of neuron values
-            plot_neural_activity(neurons, path, suff=epoch)
-            for t in range(T2):
-                lastneurons = copy(neurons)
-                neurons = model(x, y, neurons, 1, beta=beta_2, criterion=criterion)
-                [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
-                phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
-            plot_neural_activity(neurons, path, suff=str(epoch)+'_nudged')
-            N = len(neurons)
-            fig = plt.figure(figsize=(3*N,6))
-            for layeridx in range(N):
-                fig.add_subplot(2, N//2+1, layeridx+1)
-                plt.plot(range(T1+T2), l2s[layeridx])
-                plt.title('L2 change in neurons of layer '+str(layeridx+1))
-                plt.xlabel('time step')
-                plt.yscale('log')
-                plt.axvline(x=T1, linestyle=':')
-            fig.savefig(path + '/neural_equilibrating_{}.png'.format(epoch_sofar+epoch))
-            plt.close()
-
-            fig = plt.figure()
-            plt.plot(range(T1+T2), phis)
-            plt.title('Energy Function (Phi) over Model Dynamics Evolution')
-            plt.xlabel('time step')
-            plt.ylabel('energy')
-            plt.axvline(x=T1, linestyle=':')
-            plt.tight_layout()
-            fig.savefig(path + '/phi_evolution_{}.png'.format(epoch_sofar+epoch))
-            plt.close()
     
     if save:
         save_dic = {'model_state_dict': model.state_dict(), 'opt': optimizer.state_dict(),

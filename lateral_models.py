@@ -511,8 +511,8 @@ class lat_conv_CNN(lat_CNN):
 # lateral inhibition locally in convolutional layer to encourage sparsity, robustness
 class latCompCNN(lat_CNN):
     def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs=[-1], comp_syn_constraints=['zerodiag+transposesymmetric'], activation=hard_sigmoid, softmax=False, layerlambdas=[1.0e-2]):
-        #self.layerlambdas = layerlambdas
-        self.inhibitstrength = inhibitstrength 
+        self.layerlambdas = layerlambdas
+        self.inhibitstrength = inhibitstrength*0.5 # used in an energy function rather than EOM, need 1/2 coefficient (vector is squared). derivative then is 1*feature inner products
         self.competitiontype = competitiontype
         lat_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=activation, softmax=softmax)
 
@@ -568,16 +568,19 @@ class latCompCNN(lat_CNN):
                         centerx = math.floor(layer.kernel_size[0]/2)
                         centery = math.floor(layer.kernel_size[1]/2)
                         layer.weight[rowidx,rowidx,centerx,centery].zero_()
-                        layer.bias.zero_()
+                        #layer.bias.zero_()
+                        layer.bias.fill_(-self.layerlambdas[j])
 
-                conv_len = len(self.channels)-1
-                for idx, layer in enumerate(self.fc_comp_layers):
+                conv_comp_len = j
+                for j, layer in enumerate(self.fc_comp_layers):
 #SBATCH -L none@slurmdb
-                    features = self.synapses[conv_len+idx].weight.data #/ self.synapses[conv_len+idx].weight.data.norm(2, dim=1)[:,None]
+                    idx = self.sparse_layer.idxs[j+conv_comp_len]
+                    features = self.synapses[idx].weight.data #/ self.synapses[idx].weight.data.norm(2, dim=1)[:,None]
                     for rowidx in range(features.size(0)):
                         layer.weight[:,rowidx] = - self.inhibitstrength * (features * features[rowidx,:]).sum(dim=1)
                         layer.weight[rowidx,rowidx].zero_()
-                        layer.bias.zero_()
+                        #layer.bias.zero_()
+                        layer.bias.fill_(-self.layerlambdas[j+conv_comp_len])
                     layer.weight.data = layer.weight.data.contiguous() # setting columns with rows makes it column rather than row major in memory
             elif self.competitiontype == 'uniform_inhibition':
                 for layer in self.conv_comp_layers:
@@ -633,10 +636,14 @@ class latCompCNN(lat_CNN):
         for j, layer in enumerate(self.conv_comp_layers):
             idx = self.sparse_layer_idxs[j]# + 1
             phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=(1,2,3))
+            # obsolete the L2 term on this layer, use L1 instead (from the constant negative bias =lambda)
+            # this also prevents step-size 1 from instantly decaying the current value to zero.
+            phi += 0.5* neurons[idx].norm(2, dim=(1,2,3))
 
         for j, layer in enumerate(self.fc_comp_layers):
             idx = self.sparse_layer_idxs[j+len(self.conv_comp_layers)]# + 1
             phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=1)
+            phi += 0.5* neurons[idx].norm(2, dim=(1))
 
         return phi
 

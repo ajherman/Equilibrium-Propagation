@@ -3,7 +3,8 @@ python ../main.py \
     --model 'SparseCodingCNN' \
     --task 'CIFAR10' \
     --competitiontype 'feature_inner_products' \
-    --inhibitstrength 1.0 \
+    --inhibitstrength 0.05 \
+    --lambdas 0.05 \
     --sparse-layers -5 \
     --comp-syn-constraints 'zerodiag,transposesymmetric' \
     --channels 128 256 512 512 \
