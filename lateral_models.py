@@ -617,12 +617,18 @@ class latCompCNN(lat_CNN):
 
             #for j, idx in enumerate(self.sparse_layer_idxs):
             #    # cosntrain the input features to sparse coding layers to norm 1
-                if 'featureunitnorm' in constraint:
+                if 'rowunitnorm' in constraint:
                     idx = self.sparse_layer_idxs[i]
                     if isinstance(self.synapses[idx], torch.nn.Conv2d):
                         self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=(1,2,3))[:,None,None,None]
                     elif isinstance(self.synapses[idx], torch.nn.Linear):
                         self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=1)[:,None]
+                if 'colunitnorm' in constraint:
+                    idx = self.sparse_layer_idxs[i]
+                    if isinstance(self.synapses[idx], torch.nn.Conv2d):
+                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=(0,2,3))[None,:,None,None]
+                    elif isinstance(self.synapses[idx], torch.nn.Linear):
+                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=0)[None,:]
                 
                 #self.synapses[idx].bias.fill_(-self.layerlambdas[j])
 

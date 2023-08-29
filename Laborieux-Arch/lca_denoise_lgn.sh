@@ -1,19 +1,18 @@
 #!/bin/sh
 python ../main.py \
-    --model 'DenoiseLGNCNN' \
+    --model 'DenoiseLCALGNCNN' \
     --task 'CIFAR10' \
-    --channels 128 \
-    --kernels 3 \
+    --channels 512 \
+    --kernels 5 \
     --pools 'ammm' \
     --strides 1  \
     --paddings 1  \
     --fc 10 \
-    --lat-layers 0 \
-    --lat-kernels 5 \
-    --train-lateral \
-    --lat-lrs 0.3 \
-    --lat-wds 3e-4 \
-    --lat-constraints '' \
+    --sparse-layers 0 \
+    --inhibitstrength 1.0 \
+    --lambdas 0.1 \
+    --competitiontype 'feature_inner_products' \
+    --comp-syn-constraints 'rowunitnorm,zerodiag,transposesymmetric' \
     --optim 'sgd' \
     --mmt 0.9 \
     --lrs 0.25 0.1 \
@@ -33,5 +32,4 @@ python ../main.py \
     --seed $1 \
     --epochs 120 \
     --tensorboard \
-    --dt 1.0 \
-
+    --dt 0.25 \

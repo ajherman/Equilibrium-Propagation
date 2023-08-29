@@ -211,13 +211,14 @@ class Reversible_CNN(P_CNN):
 
 
 class RevLatCNN(Reversible_CNN, lat_CNN, torch.nn.Module):
-    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=my_sigmoid, softmax=False):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=my_sigmoid, softmax=False, inputbeta=0.5, dt=0.5):
         softmax = False
         # super(RevLatCNN, self)
         # note - order of super inits called is important for some reason.
-        Reversible_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax)
+        Reversible_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax, inputbeta=inputbeta, dt=dt)
         self.call_super_init = False # prevents pytorch from clearing all the paramters added by the first init
         lat_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=activation, softmax=softmax)
+        print('sll', self.lat_layer_idxs, self.lat_syn)
         for i in range(len(self.lat_layer_idxs)):
             self.lat_layer_idxs[i] += 1 # input layer is now in system, shift indexes by one
         """ # will be done by super with multiple inheritance
@@ -260,6 +261,70 @@ class RevLatCNN(Reversible_CNN, lat_CNN, torch.nn.Module):
         return phi
 
 
+class RevConvLatCNN(Reversible_CNN, lat_conv_CNN, torch.nn.Module):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_kernels, lat_layer_idxs, lat_constraints, activation=my_sigmoid, softmax=False, inputbeta=0.5, dt=0.5):
+        softmax = False
+        # super(RevLatCNN, self)
+        # note - order of super inits called is important for some reason.
+        Reversible_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax, inputbeta=inputbeta, dt=dt)
+        self.call_super_init = False # prevents pytorch from clearing all the paramters added by the first init
+        lat_conv_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_kernels, lat_layer_idxs, lat_constraints, activation=activation, softmax=softmax)
+        print('sll', self.lat_layer_idxs, self.lat_syn)
+        for i in range(len(self.lat_layer_idxs)):
+            self.lat_layer_idxs[i] += 1 # input layer is now in system, shift indexes by one
+        for i in range(len(self.conv_lat_layer_idxs)):
+            self.conv_lat_layer_idxs[i] += 1 # input layer is now in system, shift indexes by one
+
+    def Phi(self, targetneurons, neurons, betas, fullclamping, criterion):
+        phi = Reversible_CNN.Phi(self, targetneurons, neurons, betas, fullclamping, criterion)
+        mbs = neurons[0].size(0)
+        
+        for i, idx in enumerate(self.conv_lat_layer_idxs):
+            phi += torch.sum( self.conv_lat_syn[i](neurons[idx]) * neurons[idx] , dim=(1,2,3) ).squeeze()
+
+        for j, idx in enumerate(self.lat_layer_idxs):
+            phi += torch.sum( self.lat_syn[j](neurons[idx].view(mbs,-1)) * neurons[idx].view(mbs,-1), dim=1).squeeze()
+
+        return phi
+
+
+
+
+class RevLCACNN(Reversible_CNN, latCompCNN, torch.nn.Module):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs=[-1], comp_syn_constraints=['zerodiag+transposesymmetric'], activation=hard_sigmoid, softmax=False, layerlambdas=[1.0e-2], inputbeta=0.5, dt=1.0):
+        softmax = False
+        # super(RevLatCNN, self)
+        # note - order of super inits called is important for some reason.
+        Reversible_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax, inputbeta=inputbeta, dt=dt)
+        self.call_super_init = False # prevents pytorch from clearing all the paramters added by the first init
+        latCompCNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs, comp_syn_constraints, activation=activation, softmax=softmax, layerlambdas=layerlambdas, dt=dt)
+        print('sll', self.lat_layer_idxs, self.lat_syn)
+        for i in range(len(self.lat_layer_idxs)):
+            self.lat_layer_idxs[i] += 1 # input layer is now in system, shift indexes by one
+#        for i in range(len(self.conv_lat_layer_idxs)):
+#            self.conv_lat_layer_idxs[i] += 1 # input layer is now in system, shift indexes by one
+#        for i in range(len(self.sparse_layer_idxs)):
+#            self.sparse_layer_idxs[i] += 1 # input layer is now in system, shift indexes by one
+
+    def Phi(self, targetneurons, neurons, betas, fullclamping, criterion):
+        phi = Reversible_CNN.Phi(self, targetneurons, neurons, betas, fullclamping, criterion)
+        mbs = neurons[0].size(0)
+        
+#        for i, idx in enumerate(self.conv_lat_layer_idxs):
+#            phi += torch.sum( self.conv_lat_syn[i](neurons[idx]) * neurons[idx] , dim=(1,2,3) ).squeeze()
+
+        for j, idx in enumerate(self.lat_layer_idxs):
+            phi += torch.sum( self.lat_syn[j](neurons[idx].view(mbs,-1)) * neurons[idx].view(mbs,-1), dim=1).squeeze()
+
+        for j, layer in enumerate(self.conv_comp_layers):
+            idx = self.sparse_layer_idxs[j] + 1
+            phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=(1,2,3))
+
+        for j, layer in enumerate(self.fc_comp_layers):
+            idx = self.sparse_layer_idxs[j+len(self.conv_comp_layers)] + 1
+            phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=1)
+
+        return phi
 # absolute disgusting kludge. why do I have to do this in pytorch just to use JIT with cuda
 # add ModuleInterface
 @torch.jit.interface

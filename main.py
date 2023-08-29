@@ -258,8 +258,14 @@ if args.load_path=='':
             model = Reversible_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                               activation=activation, softmax=args.softmax)
         elif args.model=='DenoiseLGNCNN':
-            model = Reversible_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
-                              activation=activation, softmax=args.softmax, dt=args.dt)
+            model = RevConvLatCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
+                            args.lat_kernels, args.lat_layers, lat_constraints=args.lat_constraints,
+                          activation=activation, softmax=args.softmax)
+        elif args.model=='DenoiseLCALGNCNN':
+            model = RevLCACNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
+                              lat_layer_idxs=args.lat_layers, sparse_layer_idxs=args.sparse_layers, comp_syn_constraints = args.comp_syn_constraints,
+                              competitiontype=args.competitiontype, lat_constraints=args.lat_constraints,
+                              inhibitstrength=args.inhibitstrength, activation=activation, softmax=args.softmax, layerlambdas=args.lambdas, dt=args.dt)
         elif args.model=="LateralCNN":
             model = lat_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                             args.lat_layers, lat_constraints=args.lat_constraints,
