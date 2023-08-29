@@ -640,15 +640,28 @@ class latCompCNN(lat_CNN):
             phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=(1,2,3))
             # obsolete the L2 term on this layer, use L1 instead (from the constant negative bias =lambda)
             # this also prevents step-size 1 from instantly decaying the current value to zero.
-            phi += 0.5* neurons[idx].norm(2, dim=(1,2,3))
+            #phi += 0.5* neurons[idx].norm(2, dim=(1,2,3))
 
         for j, layer in enumerate(self.fc_comp_layers):
             idx = self.sparse_layer_idxs[j+len(self.conv_comp_layers)]# + 1
             phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=1)
-            phi += 0.5* neurons[idx].norm(2, dim=(1))
+            #phi += 0.5* neurons[idx].norm(2, dim=(1))
 
         return phi
 
+    def dPhi(self, grads, x, y, neurons, beta, criterion):
+        grads = lat_CNN.dPhi(self, grads, x, y, neurons, beta, criterion)
+        
+        # lateral layers, no transpose/backward needed, already included in bottom triangle of matrix
+        for j, layer in enumerate(self.conv_comp_layers):
+            idx = self.sparse_layer_idxs[j]
+            grads[idx] += layer(neurons[idx])
+        
+        for j, layer in enumerate(self.fc_comp_layers):
+            idx = self.sparse_layers_idxs[j+len(self.conv_comp_layers)]
+            grads[idx] += layer(neurons[idx])
+
+        return grads
     #def compute_syn_grads_sparsity(self, x, y, neurons_1, neurons_2, beta, lambdas, criterion, check_thm=False):
     #    #self.setmode(train_vert=False, train_lat=False, trian_comp=True)
     #    
@@ -667,6 +680,8 @@ class latCompCNN(lat_CNN):
         mbs = x.size(0)
         device = x.device     
         
+        grads = self.init_neurons(mbs, device) # neurons-like shaped arrays for grads
+        
         #if check_thm:
         #    for t in range(T):
         #        phi = self.Phi(x, y, neurons, beta, criterion)
@@ -683,20 +698,24 @@ class latCompCNN(lat_CNN):
 
         #        neurons[-1].retain_grad()
         #else:
+        [n.requires_grad_(False) for n in neurons if n.is_leaf]
+        [g.requires_grad_(False) for g in grads if g.is_leaf]
         for t in range(T):
-            phi = self.Phi(x, y, neurons, beta, criterion)
-            grads = torch.autograd.grad(phi, neurons, grad_outputs=self.init_grads, create_graph=False)
+            #phi = self.Phi(x, y, neurons, beta, criterion)
+            #grads = torch.autograd.grad(phi, neurons, grad_outputs=self.init_grads, create_graph=False)
+            [g.zero_() for g in grads]
+            grads = self.dPhi(grads, x, y, neurons, beta, criterion)
 
-            for idx in range(len(neurons)-1):
+            for idx in range(len(neurons)): # -1):
                 neurons[idx] = self.activation( (1-self.dt)*neurons[idx] + self.dt*grads[idx] )
                 #neurons[idx] = self.activation( grads[idx] )
                 #neurons[idx].requires_grad = True
          
-            if False: #not_mse and not(self.softmax):
-                neurons[-1] = grads[-1]
-            else:
-                neurons[-1] = self.activation( (1-self.dt)*neurons[-1] + self.dt*grads[-1] )
-                #neurons[-1] = self.activation( grads[-1] )
+            #if not_mse and not(self.softmax):
+            #    neurons[-1] = grads[-1]
+            #else:
+            #    neurons[-1] = self.activation( (1-self.dt)*neurons[-1] + self.dt*grads[-1] )
+            #    #neurons[-1] = self.activation( grads[-1] )
 
             #neurons[-1].requires_grad = True
 

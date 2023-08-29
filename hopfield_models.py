@@ -24,6 +24,11 @@ class Reversible_CNN(P_CNN):
         self.trainclassifier = trainclassifier
         self.trainreconstruct = trainreconstruct
 
+    def postupdate(self):
+        with torch.no_grad():
+            #self.synapses[0].bias.fill_(-0.35)
+            self.synapses[0].weight.data /= self.synapses[0].weight.norm(2, dim=(0,2,3))[None,:,None,None]
+
     def Phi(self, targetneurons, neurons, betas, fullclamping, criterion):
 
         mbs = neurons[0].size(0)
@@ -78,6 +83,8 @@ class Reversible_CNN(P_CNN):
         # nudge on input for reconstruction of unclamped portion
         if self.trainreconstruct:
             self.betas[0].fill_(self.inputbeta + beta)
+        else:
+            self.betas[0].fill_(self.inputbeta)
         # nudge for classification
         if self.trainclassifier:
             self.betas[-1].fill_(beta)
@@ -109,13 +116,18 @@ class Reversible_CNN(P_CNN):
                 neurons[idx].requires_grad = True
 
         # simulate dynamics for T timesteps
+        #print('weight', self.synapses[0].weight.norm(1, dim=(0,2,3)))
         for t in range(T):
-            with torch.no_grad():
-                neurons[1].zero_()
+            #with torch.no_grad():
+            #    neurons[1].zero_()
             phi = self.Phi(targetneurons, neurons, betas, fullclamping, criterion)
             grads = torch.autograd.grad(phi, neurons, grad_outputs=self.initgradstensor, create_graph=check_thm)
             
-            neurons[0] = -2 + 4*self.activation( ((1-self.dt)*neurons[0] + self.dt*grads[0]) / 4 + 0.5 )
+            #neurons[0] = -2 + 4*self.activation( ((1-self.dt)*neurons[0] + self.dt*grads[0]) / 4 + 0.5 )
+            #print('x', targetneurons[0].min().item(), targetneurons[0].mean().item(), targetneurons[0].max().item(), 'LGN', neurons[0].min().item(), neurons[0].mean().item(), neurons[0].max().item(), 'grads', grads[0].min().item(), grads[0].mean().item(), grads[0].max().item(), 'grads idx+1', grads[1].mean().item(), 'layer idx+1', neurons[1].mean().item())
+
+    
+            neurons[0] = ((1-self.dt)*neurons[0] + self.dt*grads[0])
             #neurons[0].requires_grad = True
 
             for idx in range(1,len(neurons)-1):

@@ -439,6 +439,36 @@ class P_CNN(torch.nn.Module):
                     L = criterion(self.synapses[-1](layers[-1].view(mbs,-1)).float(), y).squeeze()  
                 phi -= beta*L            
         return phi
+
+    def dPhi(self, grads, x, y, neurons, beta, criterion):
+        #unpoolidxs = [None for range(len(self.pools))]
+        for p in self.pools:
+            p.return_indices = True
+        grads[0] += self.pools[0](self.synapses[0](x))[0]
+        for idx in range(1,len(self.kernels)):
+            out = self.pools[idx](self.synapses[idx](neurons[idx-1]))
+            grads[idx] += out[0]
+            
+            grads[idx-1] += F.conv_transpose2d(F.max_unpool2d(neurons[idx], out[1], self.pools[idx-1].kernel_size), self.synapses[idx].weight, stride=self.synapses[idx].stride, padding=self.synapses[idx].padding)
+        
+        tot_len = len(self.synapses)
+        if self.softmax:
+            tot_len -= 1
+        for idx in range(len(self.kernels), tot_len):
+            grads[idx] += self.synapses[idx](neurons[idx-1].view(x.size(0), -1))
+            grads[idx-1] += (F.linear(neurons[idx], self.synapses[idx].weight.T)).view(grads[idx-1].size())
+
+        if self.softmax:
+            print('Analytical CEL Softmax not implemented!')
+            pass # idk the grad of softmax
+        elif criterion.__class__.__name__.find('MSE') != -1:
+            y = F.one_hot(y, num_classes=self.nc)
+            grads[-1] += beta*(y - neurons[-1])
+        for p in self.pools:
+            p.return_indices = False
+
+        return grads
+
     
 
     def forward(self, x, y, neurons, T, beta=0.0, check_thm=False, criterion=torch.nn.MSELoss(reduction='none')):

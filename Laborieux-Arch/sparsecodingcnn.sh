@@ -3,8 +3,8 @@ python ../main.py \
     --model 'SparseCodingCNN' \
     --task 'CIFAR10' \
     --competitiontype 'feature_inner_products' \
-    --inhibitstrength $1 \
-    --lambdas $2 \
+    --inhibitstrength 1.0 \
+    --lambdas 0.1 \
     --sparse-layers -5 \
     --comp-syn-constraints 'zerodiag,transposesymmetric' \
     --dt 0.2 \
@@ -18,18 +18,19 @@ python ../main.py \
     --mmt 0.9 \
     --lrs 0.25 0.15 0.1 0.08 0.05 \
     --lr-decay \
-    --epochs 10 \
+    --epochs 5 \
     --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
     --act 'my_hard_sig' \
     --todo 'train' \
     --betas 0.0 0.5 \
     --thirdphase \
-    --T1 250 \
-    --T2 120 \
+    --T1 $3 \
+    --T2 $4 \
     --mbs 128 \
     --loss 'mse' \
     --data-aug \
     --device 0 \
-    --seed $3 \
+    --seed $1 \
+    --dt $2 \
     --save \
 #    --load-path-convert results/EP/mse/2023-08-03/orig_mse_14-38-36_gpu0_120epochs
