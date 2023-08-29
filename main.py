@@ -94,6 +94,8 @@ parser.add_argument('--cpu', default = False, action = 'store_true', help='use C
 
 parser.add_argument('--noise', type=float, default = 0.0,  help='standard deviation of guassian noise added to training data')
 
+parser.add_argument('--dt', type=float, default = 1.0,  help='timestep for model dynamics. Decay time constant = 1.0')
+
 args = parser.parse_args()
 command_line = ' '.join(sys.argv)
 
@@ -200,6 +202,11 @@ if args.loss=='mse':
     criterion = torch.nn.MSELoss(reduction='none').to(device)
 elif args.loss=='cel':
     criterion = torch.nn.CrossEntropyLoss(reduction='none').to(device)
+elif args.loss=='loggrad':
+    # equivelant to CEL if output was already softmaxed.
+    # instead of taking softmax of unconstrinaed neurons, the denominator of the softmax is just a term in the loss.
+    # if logsumexp doesn't work for some reason (unstable), could use L1 penalty for incorrect neurons
+    criterion = lambda output, target: -(output[target]).sum(dim=1) + torch.logsumexp(output, dim=1) #+ (output.sum(dim=1) - output[target].sum(dim=1))
 print('loss =', criterion, '\n')
 
 
@@ -246,10 +253,13 @@ if args.load_path=='':
             model = latCompCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                               lat_layer_idxs=args.lat_layers, sparse_layer_idxs=args.sparse_layers, comp_syn_constraints = args.comp_syn_constraints,
                               competitiontype=args.competitiontype, lat_constraints=args.lat_constraints,
-                              inhibitstrength=args.inhibitstrength, activation=activation, softmax=args.softmax, layerlambdas=args.lambdas)
+                              inhibitstrength=args.inhibitstrength, activation=activation, softmax=args.softmax, layerlambdas=args.lambdas, dt=args.dt)
         elif args.model=='ReversibleCNN':
             model = Reversible_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                               activation=activation, softmax=args.softmax)
+        elif args.model=='DenoiseLGNCNN':
+            model = Reversible_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
+                              activation=activation, softmax=args.softmax, dt=args.dt)
         elif args.model=="LateralCNN":
             model = lat_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                             args.lat_layers, lat_constraints=args.lat_constraints,
@@ -424,6 +434,13 @@ if args.todo=='train':
             opt_sparse.load_state_dict(checkpoint['sparse_optim'])
         if checkpoint['scheduler'] is not None and args.lr_decay:
             scheduler.load_state_dict(checkpoint['scheduler'])
+    elif args.load_path_convert!='':
+        checkpoint = torch.load(args.load_path_convert + '/checkpoint.tar')
+        optimizer.load_state_dict(checkpoint['opt'])
+        if 'sparse_optim' in checkpoint.keys():
+            opt_sparse.load_state_dict(checkpoint['sparse_optim'])
+        if checkpoint['scheduler'] is not None and args.lr_decay:
+            scheduler.load_state_dict(checkpoint['scheduler'])
     else: 
         checkpoint = None
     
@@ -466,7 +483,7 @@ if args.todo=='train':
 
     train(model, optimizer, train_loader, test_loader, args.T1, args.T2, betas, device, args.epochs, criterion, alg=args.alg, 
                  random_sign=args.random_sign, check_thm=args.check_thm, save=args.save, path=path, checkpoint=checkpoint, 
-                 thirdphase=args.thirdphase, scheduler=scheduler, cep_debug=args.cep_debug)#, tensorboard=args.tensorboard)
+                 thirdphase=args.thirdphase, scheduler=scheduler, cep_debug=args.cep_debug, tensorboard=args.tensorboard)
 
 
 elif args.todo=='attack':

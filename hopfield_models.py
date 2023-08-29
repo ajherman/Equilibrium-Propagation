@@ -5,7 +5,7 @@ from lateral_models import *
 import typing
 
 class Reversible_CNN(P_CNN):
-    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=my_sigmoid, softmax=False):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=my_sigmoid, softmax=False, inputbeta=0.5, dt=0.5):
         P_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax)
 
         self.fullclamping = []
@@ -15,6 +15,10 @@ class Reversible_CNN(P_CNN):
         self.mode(trainclassifier=True, trainreconstruct=False)
 
         self.reconcriterion = torch.nn.MSELoss(reduction = 'none')
+
+        self.inputbeta = inputbeta
+
+        self.dt = dt
 
     def mode(self, trainclassifier=True, trainreconstruct=False):
         self.trainclassifier = trainclassifier
@@ -42,7 +46,10 @@ class Reversible_CNN(P_CNN):
                 phi += torch.sum( self.synapses[idx](neurons[idx].view(mbs,-1)) * neurons[idx+1], dim=1).squeeze()
              
         if targetneurons[0].size(0) > 0:
+            # MSE with the input, like nudge
             phi -= 0.5*(betas[0]*self.reconcriterion(neurons[0], targetneurons[0])).view(mbs,-1).sum(dim=1).squeeze() 
+            # dot-product energy, like Identity input layer
+            #phi += torch.sum(neurons[0]*targetneurons[0])
         for idx in range(1,len(neurons)):
             if targetneurons[idx].size(0) > 0:
                 if criterion.__class__.__name__.find('MSE')!=-1:
@@ -70,7 +77,7 @@ class Reversible_CNN(P_CNN):
             self.betas[idx].zero_()
         # nudge on input for reconstruction of unclamped portion
         if self.trainreconstruct:
-            self.betas[0].fill_(beta)
+            self.betas[0].fill_(self.inputbeta + beta)
         # nudge for classification
         if self.trainclassifier:
             self.betas[-1].fill_(beta)
@@ -94,55 +101,34 @@ class Reversible_CNN(P_CNN):
         device = neurons[0].device
 
         # apply full clamping
-        with torch.no_grad():
-            for idx in range(len(neurons)):
-                if fullclamping[idx].size(0) >  0:
-                    neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
+#        with torch.no_grad():
+        for idx in range(len(neurons)):
+#                if fullclamping[idx].size(0) >  0:
+#                    neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
+            if neurons[idx].is_leaf:
                 neurons[idx].requires_grad = True
 
         # simulate dynamics for T timesteps
         for t in range(T):
+            with torch.no_grad():
+                neurons[1].zero_()
             phi = self.Phi(targetneurons, neurons, betas, fullclamping, criterion)
             grads = torch.autograd.grad(phi, neurons, grad_outputs=self.initgradstensor, create_graph=check_thm)
+            
+            neurons[0] = -2 + 4*self.activation( ((1-self.dt)*neurons[0] + self.dt*grads[0]) / 4 + 0.5 )
+            #neurons[0].requires_grad = True
 
-            #print("")
-            #print("================================= TN ===============================")
-            #print(targetneurons)
-            #print("")
-            #print("============================= grads ========================")
-            #print(grads)
-            #for idx in range(len(grads)):
-            #    print('targneur, grads', targetneurons[idx].sum(), grads[idx].sum())
-
-            for idx in range(0,len(neurons)-1):
-                neurons[idx] = self.activation( grads[idx] )
-                # if check_thm:
-                #   neurons[idx].retain_grad()
-                # else:
-                neurons[idx].requires_grad = True
-         
-            if False: #not_mse and not(self.softmax):
-                neurons[-1] = grads[-1]
-            else:
-                neurons[-1] = self.activation( grads[-1] )
-            # if chek_thm:
-            #   neurons[-1].retain_grad()
-            neurons[-1].requires_grad = True
+            for idx in range(1,len(neurons)-1):
+                neurons[idx] = self.activation( (1-self.dt)*neurons[idx] + self.dt*grads[idx] )
+                #neurons[idx].requires_grad = True
 
             # apply full clamping
-            with torch.no_grad():
-                for idx in range(len(neurons)):
-                    if fullclamping[idx].size(0) >  0:
-                        neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
-
+#            with torch.no_grad():
+#                for idx in range(len(neurons)):
+#                    if fullclamping[idx].size(0) >  0:
+#                        neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
+#
             ## average the last n neurons in case its a limit cycle
-            #n = 3
-            #if T-t <= n:
-            #    for idx in range(len(neurons)):
-            #        neuronsout[idx] += neurons[idx]/n
-        
-        #print('g', [g.sum() for g in grads])
-        #print('n', [n.sum() for n in neurons])
 
         return neurons
        

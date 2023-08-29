@@ -510,11 +510,14 @@ class lat_conv_CNN(lat_CNN):
 
 # lateral inhibition locally in convolutional layer to encourage sparsity, robustness
 class latCompCNN(lat_CNN):
-    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs=[-1], comp_syn_constraints=['zerodiag+transposesymmetric'], activation=hard_sigmoid, softmax=False, layerlambdas=[1.0e-2]):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs=[-1], comp_syn_constraints=['zerodiag+transposesymmetric'], activation=hard_sigmoid, softmax=False, layerlambdas=[1.0e-2], dt=1.0):
         self.layerlambdas = layerlambdas
         self.inhibitstrength = inhibitstrength*0.5 # used in an energy function rather than EOM, need 1/2 coefficient (vector is squared). derivative then is 1*feature inner products
         self.competitiontype = competitiontype
         lat_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=activation, softmax=softmax)
+
+        self.dt = dt
+        print('timestep:', self.dt)
 
         for idx in range(len(sparse_layer_idxs)):
             if sparse_layer_idxs[idx] < 0:
@@ -573,7 +576,6 @@ class latCompCNN(lat_CNN):
 
                 conv_comp_len = j
                 for j, layer in enumerate(self.fc_comp_layers):
-#SBATCH -L none@slurmdb
                     idx = self.sparse_layer.idxs[j+conv_comp_len]
                     features = self.synapses[idx].weight.data #/ self.synapses[idx].weight.data.norm(2, dim=1)[:,None]
                     for rowidx in range(features.size(0)):
@@ -659,6 +661,47 @@ class latCompCNN(lat_CNN):
     #    
     #    delta_phi = (phi_2 - phi_1)/(lambdas[1] - lambdas[0])
     #    delta_phi.backward() # p.grad = -(d_Phi_2/dp - d_Phi_1/dp)/(beta_2 - beta_1) ----> dL/dp  by the theorem
+
+    def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
+        not_mse = (criterion.__class__.__name__.find('MSE')==-1)
+        mbs = x.size(0)
+        device = x.device     
+        
+        #if check_thm:
+        #    for t in range(T):
+        #        phi = self.Phi(x, y, neurons, beta, criterion)
+        #        init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
+        #        grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=True)
+
+        #        for idx in range(len(neurons)-1):
+        #            neurons[idx].retain_grad()
+        #     
+        #        if not_mse and not(self.softmax):
+        #            neurons[-1] = grads[-1]
+        #        else:
+        #            neurons[-1] = self.activation( grads[-1] )
+
+        #        neurons[-1].retain_grad()
+        #else:
+        for t in range(T):
+            phi = self.Phi(x, y, neurons, beta, criterion)
+            grads = torch.autograd.grad(phi, neurons, grad_outputs=self.init_grads, create_graph=False)
+
+            for idx in range(len(neurons)-1):
+                neurons[idx] = self.activation( (1-self.dt)*neurons[idx] + self.dt*grads[idx] )
+                #neurons[idx] = self.activation( grads[idx] )
+                #neurons[idx].requires_grad = True
+         
+            if False: #not_mse and not(self.softmax):
+                neurons[-1] = grads[-1]
+            else:
+                neurons[-1] = self.activation( (1-self.dt)*neurons[-1] + self.dt*grads[-1] )
+                #neurons[-1] = self.activation( grads[-1] )
+
+            #neurons[-1].requires_grad = True
+
+        return neurons
+
 
 
 

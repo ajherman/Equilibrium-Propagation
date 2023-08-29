@@ -3,10 +3,11 @@ python ../main.py \
     --model 'SparseCodingCNN' \
     --task 'CIFAR10' \
     --competitiontype 'feature_inner_products' \
-    --inhibitstrength 0.05 \
-    --lambdas 0.05 \
+    --inhibitstrength $1 \
+    --lambdas $2 \
     --sparse-layers -5 \
     --comp-syn-constraints 'zerodiag,transposesymmetric' \
+    --dt 0.2 \
     --channels 128 256 512 512 \
     --kernels 3 3 3 3 \
     --pools 'mmmm' \
@@ -29,6 +30,6 @@ python ../main.py \
     --loss 'mse' \
     --data-aug \
     --device 0 \
-    --seed $1 \
+    --seed $3 \
     --save \
 #    --load-path-convert results/EP/mse/2023-08-03/orig_mse_14-38-36_gpu0_120epochs

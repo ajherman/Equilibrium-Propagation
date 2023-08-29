@@ -473,8 +473,10 @@ class P_CNN(torch.nn.Module):
                     neurons[idx] = self.activation( grads[idx] )
                     neurons[idx].requires_grad = True
              
+                
                 if not_mse and not(self.softmax):
-                    neurons[-1] = grads[-1]
+                    #neurons[-1] = grads[-1]
+                    neurons[-1] = self.activation(grads[-1]) + 1e-2
                 else:
                     neurons[-1] = self.activation( grads[-1] )
 
@@ -1253,12 +1255,12 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
     """
     # for reconstruction only, select random portion of input to clamp
     isreconstructmodel = hasattr(model, 'fullclamping')
-    masktransform = torchvision.transforms.Compose([
-                                      torchvision.transforms.RandomCrop(size=model.in_size, padding=model.in_size//2, padding_mode='constant'),
-                                  ])
+    #masktransform = torchvision.transforms.Compose([
+    #                                  torchvision.transforms.RandomCrop(size=model.in_size, padding=model.in_size//2, padding_mode='constant'),
+    #                              ])
     reconstructfreq = 1 # train reconstruct on 1 of x batches
     minreconstructepoch = 0
-    maxreconstructepoch = 1
+    maxreconstructepoch = 10
     #isreconstructmodel = issubclass(model.__class__, ReversibleCNN) #False # disable reconstruction trianing
 
     for epoch in range(epochs):
@@ -1307,15 +1309,17 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     lastneurons = copy(neurons)
                     neurons = model(x, y, neurons, 1, beta=beta_1, criterion=criterion)
                     [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
-                    phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
+                    if not isreconstructmodel:
+                        phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
                 # also plot histogram of neuron values
                 plot_neural_activity(neurons, path, suff=epoch)
                 for t in range(T2):
                     lastneurons = copy(neurons)
                     neurons = model(x, y, neurons, 1, beta=beta_2, criterion=criterion)
                     [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
-                    phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
-                plot_neural_activity(neurons, path, suff=str(epoch)+'_nudged')
+                    if not isreconstructmodel:
+                        phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
+                plot_neural_activity(neurons, path, suff=str(epoch_sofar+epoch)+'_nudged')
                 N = len(neurons)
                 fig = plt.figure(figsize=(3*N,6))
                 for layeridx in range(N):
@@ -1328,15 +1332,16 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 fig.savefig(path + '/neural_equilibrating_{}.png'.format(epoch_sofar+epoch))
                 plt.close()
 
-                fig = plt.figure()
-                plt.plot(range(T1+T2), phis)
-                plt.title('Energy Function (Phi) over Model Dynamics Evolution')
-                plt.xlabel('time step')
-                plt.ylabel('energy')
-                plt.axvline(x=T1, linestyle=':')
-                plt.tight_layout()
-                fig.savefig(path + '/phi_evolution_{}.png'.format(epoch_sofar+epoch))
-                plt.close()
+                if not isreconstructmodel:
+                    fig = plt.figure()
+                    plt.plot(range(T1+T2), phis)
+                    plt.title('Energy Function (Phi) over Model Dynamics Evolution')
+                    plt.xlabel('time step')
+                    plt.ylabel('energy')
+                    plt.axvline(x=T1, linestyle=':')
+                    plt.tight_layout()
+                    fig.savefig(path + '/phi_evolution_{}.png'.format(epoch_sofar+epoch))
+                    plt.close()
 
             neurons = model.init_neurons(mbs, device)
 
@@ -1344,13 +1349,18 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
             #    x = x.double() 
             reconstruct = isreconstructmodel and int(idx%reconstructfreq) == 0 and epoch >= minreconstructepoch and epoch < maxreconstructepoch
     
+            if isreconstructmodel:
+                model.trainreconstruct = True
             if reconstruct:
                 # results in a zero and one mask used to select which indexes of the input to fully clamp.
                 # The zeros (the padding included in the randomcrop) are where it will reconstruct the output
-                reconstructmask = torch.stack([masktransform(torch.ones_like(x[0])) for i in range(mbs)])
-                model.fullclamping[0] = reconstructmask.bool()
-                classifyalso = torch.rand((1,)).item() < 0.4 # this percent of the time, simulataneoulsy nudge the classification
+                #reconstructmask = torch.stack([masktransform(torch.ones_like(x[0])) for i in range(mbs)])
+                #model.fullclamping[0] = reconstructmask.bool()
+                classifyalso = torch.rand((1,)).item() < 0.1 # this percent of the time, simulataneoulsy nudge the classification
                 model.mode(trainclassifier=classifyalso, trainreconstruct=True)
+
+                origx = x.clone()
+                x = AddGaussianNoise(0.0, 0.2)(x)
 
 
                 if model.__class__.__name__ == 'sparseCNN' :#torch.rand((1,)).item() < 0.1:
@@ -1407,9 +1417,9 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
 
                     #    continue
                     
-            elif isreconstructmodel:
-                model.mode(trainclassifier=True, trainreconstruct=False)
-                model.fullclamping[0].fill_(True)
+            #elif isreconstructmodel:
+            #    model.mode(trainclassifier=True, trainreconstruct=False)
+            #    model.fullclamping[0].fill_(True)
 
                         
             # run sparse training step
@@ -1478,6 +1488,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 run_total += mbs # x.size(0)
                     
             
+            if reconstruct:
+                x = origx # remove noise, to nudge for denoising
             if alg=='EP':
                 # Second phase
                 if random_sign and (beta_1==0.0):
@@ -1589,7 +1601,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
 
                 if tensorboard:
                     batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
-                    im = lambda t: (t*255).to(torch.uint8)
+                    im = lambda t: ((t-t.min())/(t.max()-t.min())*255).to(torch.uint8)
 
                     img_grid = torchvision.utils.make_grid(im((x*model.fullclamping[0])[:16].data.cpu()))
                     # matplotlib_imshow(img_grid, one_channel=True)

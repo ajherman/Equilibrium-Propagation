@@ -1,11 +1,7 @@
 #!/bin/sh
 python ../main.py \
-    --model 'SparseCodingCNN' \
+    --model 'CNN' \
     --task 'CIFAR10' \
-    --competitiontype 'feature_inner_products' \
-    --sparse-layers -5 \
-    --inhibitstrength $1 \
-    --lambdas $2 \
     --channels 128 256 512 512 \
     --kernels 3 3 3 3 \
     --pools 'mmmm' \
@@ -25,10 +21,11 @@ python ../main.py \
     --T1 250 \
     --T2 25 \
     --mbs 128 \
-    --loss 'mse' \
+    --loss 'loggrad' \
     --data-aug \
+    --save  \
     --device 0 \
-    --seed $3 \
-    --save \
-    --load-path-convert results/EP/mse/2023-08-03/orig_mse_14-38-36_gpu0_120epochs \
+    --seed $1 \
+#    --alg CEP \
+#    --load-path results/EP/cel/2023-07-18/12-05-15_gpu0
 
