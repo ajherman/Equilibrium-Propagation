@@ -320,9 +320,9 @@ class RevLCACNN(Reversible_CNN, latCompCNN, torch.nn.Module):
                 if 'colunitnorm' in constraint:
                     idx = self.sparse_layer_idxs[i]
                     if isinstance(self.synapses[idx], torch.nn.Conv2d):
-                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=(0,2,3))[None,:,None,None]
+                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=(0,2,3))[None,:,None,None] / 50
                     elif isinstance(self.synapses[idx], torch.nn.Linear):
-                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=0)[None,:] 
+                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=0)[None,:] / 50
 
     def mode(self, trainclassifier=True, trainreconstruct=False, noisebeta=False):
         self.trainclassifier = trainclassifier
@@ -376,12 +376,12 @@ class RevLCACNN(Reversible_CNN, latCompCNN, torch.nn.Module):
         for j, layer in enumerate(self.conv_comp_layers):
             idx = self.sparse_layer_idxs[j] + 1
             phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=(1,2,3))
-            phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
+            #phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
 
         for j, layer in enumerate(self.fc_comp_layers):
             idx = self.sparse_layer_idxs[j+len(self.conv_comp_layers)] + 1
             phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=1)
-            phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
+            #phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
 
         return phi
 # absolute disgusting kludge. why do I have to do this in pytorch just to use JIT with cuda

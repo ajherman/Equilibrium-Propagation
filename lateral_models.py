@@ -534,14 +534,14 @@ class latCompCNN(lat_CNN):
             if idx in sparse_layer_idxs:
                 compete_radius = math.ceil((kernels[idx])/(strides[idx])) - 1 # number of neurons in one direction between this neuron and the first neuron without any of the same inputs (exclusive)
                 compete_range = compete_radius*2 + 1 # width of block of neurons which share any input neurons
-                layer = torch.nn.Conv2d(channels[idx+1], channels[idx+1], compete_range, padding=compete_radius, bias=True)
+                layer = torch.nn.Conv2d(channels[idx+1], channels[idx+1], compete_range, padding=compete_radius, bias=False)
                 layer.requires_grad_(False)
                 self.conv_comp_layers.append(layer)
                 #self.conv_comp_layers[idx].requires_grad_(False)
 
         for idx in range(len(fc)):
             if idx+len(kernels) in sparse_layer_idxs:
-                layer = torch.nn.Linear(fc[idx], fc[idx], bias=True)
+                layer = torch.nn.Linear(fc[idx], fc[idx], bias=False)
                 layer.requires_grad_(False)
                 self.fc_comp_layers.append(layer)
                 #self.fc_comp_layers[idx].requires_grad_(False)
@@ -587,15 +587,16 @@ class latCompCNN(lat_CNN):
             elif self.competitiontype == 'uniform_inhibition':
                 for layer in self.conv_comp_layers:
                     layer.weight = layer.weight.fill_(-self.inhibitstrength)
-                    layer.bias.zero_()
                 for layer in self.fc_comp_layers:
                     layer.weight = layer.weight.fill_(-self.inhibitstrength)
-                    layer.bias.zero_()
             else:
                 print('UNKNOW VALUE {} for competition_type!!'.format(self.competitiontype))
 
     def postupdate(self, setlat=True):
         lat_CNN.postupdate(self)
+        
+        if setlat:
+            self.setlat()
         
         with torch.no_grad():
             for i, constraint in enumerate(self.comp_syn_constraints):
@@ -617,26 +618,23 @@ class latCompCNN(lat_CNN):
 
             #for j, idx in enumerate(self.sparse_layer_idxs):
             #    # cosntrain the input features to sparse coding layers to norm 1
+                idx = self.sparse_layer_idxs[i]
                 if 'rowunitnorm' in constraint:
-                    idx = self.sparse_layer_idxs[i]
                     if isinstance(self.synapses[idx], torch.nn.Conv2d):
                         self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=(1,2,3))[:,None,None,None]
                     elif isinstance(self.synapses[idx], torch.nn.Linear):
                         self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=1)[:,None]
                 if 'colunitnorm' in constraint:
-                    idx = self.sparse_layer_idxs[i]
                     if isinstance(self.synapses[idx], torch.nn.Conv2d):
                         self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=(0,2,3))[None,:,None,None]
                     elif isinstance(self.synapses[idx], torch.nn.Linear):
                         self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=0)[None,:]
                 if 'fixedlambda' in constraint:
-                    self.conv_comp_layers[i].bias.fill_(-self.layerlambdas[i])
+                    #self.conv_comp_layers[i].bias.fill_(-self.layerlambdas[i])
+                    self.synapses[idx].bias.fill_(-self.layerlambdas[i])
                 
                 #self.synapses[idx].bias.fill_(-self.layerlambdas[j])
 
-        if setlat:
-            self.setlat()
-        
 
     def Phi(self, x, y, neurons, beta, criterion):
         phi = lat_CNN.Phi(self, x, y, neurons, beta, criterion)
