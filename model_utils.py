@@ -1231,9 +1231,9 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
     return tot_correct/nbatches/mbs, tot_correct_adv/nbatches/mbs, adv_examples, preds, preds_adv
 
         
-def hebbian_syn_grads(model, x, neurons, criterion, coeff=1):
+def hebbian_syn_grads(model, x, y, neurons, beta, criterion, coeff=1):
     model.zero_grad()
-    phi = model.Phi(x, torch.tensor([]), neurons, beta=0, criterion=criterion)
+    phi = model.Phi(x, y, neurons, beta, criterion=criterion)
     (-coeff*phi.sum()).backward()
 
 def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs, criterion, alg='EP', 
@@ -1246,7 +1246,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
     mbs = train_loader.batch_size
     start = time.time()
     iter_per_epochs = math.ceil(len(train_loader.dataset)/mbs)
-    beta_1, beta_2 = betas
+    beta_1, beta_2 = betas[:2]
 
     if checkpoint is None:
         train_acc = [10.0]
@@ -1325,12 +1325,15 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
         print('bias L1 norms', [l.bias.norm(1).item() for l in model.synapses])
         print('final forward fc bias', model.synapses[-1].bias)
 
-
         for idx, (x, y) in enumerate(train_loader):
             x, y = x.to(device), y.to(device)
             mbs = x.size(0)
+
+            reconstruct = isreconstructmodel and int(idx%reconstructfreq) == 0 and epoch >= minreconstructepoch and epoch < maxreconstructepoch
+            if reconstruct:
+                beta_1 = 1.0 
     
-            if ((idx%(iter_per_epochs//2)==0) or (idx==iter_per_epochs-1)) and save:
+            if (((idx)%(iter_per_epochs//2)==0) or (idx==iter_per_epochs-1)) and save:
                 # plot how much the neurons are changing to know when it equilibrates
                 neurons = model.init_neurons(mbs, device)
                 l2s = [[] for i in range(len(neurons))]
@@ -1341,6 +1344,13 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
                     if not isreconstructmodel:
                         phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
+                if reconstruct:
+                    for t in range(50):
+                        lastneurons = copy(neurons)
+                        neurons = model(x, y, neurons, 1, beta=0.0, criterion=criterion)
+                        [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
+                        if not isreconstructmodel:
+                            phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
                 # also plot histogram of neuron values
                 plot_neural_activity(neurons, path, suff=epoch)
                 for t in range(T2):
@@ -1354,7 +1364,10 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 fig = plt.figure(figsize=(3*N,6))
                 for layeridx in range(N):
                     fig.add_subplot(2, N//2+1, layeridx+1)
-                    plt.plot(range(T1+T2), l2s[layeridx])
+                    if reconstruct:
+                        plt.plot(range(T1+50+T2), l2s[layeridx])
+                    else:
+                        plt.plot(range(T1+T2), l2s[layeridx])
                     plt.title('L2 change in neurons of layer '+str(layeridx+1))
                     plt.xlabel('time step')
                     plt.yscale('log')
@@ -1377,8 +1390,6 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
 
             #if alg=='CEP' and cep_debug:
             #    x = x.double() 
-            reconstruct = isreconstructmodel and int(idx%reconstructfreq) == 0 and epoch >= minreconstructepoch and epoch < maxreconstructepoch
-    
             if isreconstructmodel:
                 model.trainreconstruct = True
             if reconstruct:
@@ -1386,11 +1397,16 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 # The zeros (the padding included in the randomcrop) are where it will reconstruct the output
                 #reconstructmask = torch.stack([masktransform(torch.ones_like(x[0])) for i in range(mbs)])
                 #model.fullclamping[0] = reconstructmask.bool()
-                classifyalso = torch.rand((1,)).item() < 0.1 # this percent of the time, simulataneoulsy nudge the classification
-                model.mode(trainclassifier=classifyalso, trainreconstruct=True)
-
+                classifyalso = False#torch.rand((1,)).item() < 0.1 # this percent of the time, simulataneoulsy nudge the classification
+                model.mode(trainclassifier=classifyalso, trainreconstruct=True)#, noisebeta=True)#(torch.randn((1,)).item() < 0.5))
+                
                 origx = x.clone()
-                x = AddGaussianNoise(0.0, 0.2)(x)
+                x = AddGaussianNoise(0.0, 0.1)(x)
+                #neurons = model(x, y, neurons, T1, beta_2)
+                #print(neurons)
+                #hebbian_syn_grads(model, x, y, neurons, beta_2, criterion, 1)
+                #optimizer.step()
+                #neurons = model.init_neurons(mbs, device)
 
 
                 if model.__class__.__name__ == 'sparseCNN' :#torch.rand((1,)).item() < 0.1:
@@ -1447,9 +1463,10 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
 
                     #    continue
                     
-            #elif isreconstructmodel:
-            #    model.mode(trainclassifier=True, trainreconstruct=False)
-            #    model.fullclamping[0].fill_(True)
+            if isreconstructmodel:
+                #model.mode(trainclassifier=True, trainreconstruct=False)
+                model.fullclamping[0].fill_(True)
+                #model.fullclamping[0].fill_(False)
 
                         
             # run sparse training step
@@ -1465,7 +1482,6 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
 
             if alg=='EP' or alg=='CEP' or alg=="HebUnsupervised":
                 # First phase
-
                 neurons = model(x, y, neurons, T1, beta=beta_1, criterion=criterion)
                 neurons_1 = copy(neurons)
                 if alg == 'HebUnsupervised':
@@ -1517,34 +1533,58 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 run_correct += (y == pred).sum().item()
                 run_total += mbs # x.size(0)
                     
-            
             if reconstruct:
-                x = origx # remove noise, to nudge for denoising
+                # let the input float phase
+                print('before float', [n.norm(2).item() for n in neurons_1])
+                with torch.no_grad():
+                    #neurons_1[0].zero_()
+                    neurons_1[0] = F.conv_transpose2d(neurons_1[1], model.synapses[0].weight, padding=model.synapses[0].padding)
+                model.fullclamping[0].fill_(False)
+                neurons_1 = model(torch.zeros_like(x), y, neurons_1, 20, beta=0.0)
+                print('after float ', [n.norm(2).item() for n in neurons_1])
+            
+            
             if alg=='EP':
                 # Second phase
                 if random_sign and (beta_1==0.0):
                     rnd_sgn = 2*np.random.randint(2) - 1
-                    betas = beta_1, rnd_sgn*beta_2
-                    beta_1, beta_2 = betas
+                    betas[1] = rnd_sgn*beta_2
+                    beta_2 = betas[1]
             
-                neurons = model(x, y, neurons, T2, beta = beta_2, criterion=criterion)
+                if reconstruct:
+                    #x = origx # remove noise, to nudge for denoising
+                    neurons = model(origx, y, neurons, T2, beta = beta_2, criterion=criterion)
+                else:
+                    neurons = model(x, y, neurons, T2, beta = beta_2, criterion=criterion)
                 neurons_2 = copy(neurons)
 
                 # Third phase (if we approximate f' as f'(x) = (f(x+h) - f(x-h))/2h)
                 if thirdphase:
+                    if len(betas) > 2:
+                        beta_3 = betas[2]
+                    else:
+                        beta_3 = -beta_2
                     #come back to the first equilibrium
                     neurons = copy(neurons_1)
-                    neurons = model(x, y, neurons, T2, beta = - beta_2, criterion=criterion)
+                    neurons = model(x, y, neurons, T2, beta = beta_3, criterion=criterion)
                     neurons_3 = copy(neurons)
                     if not(isinstance(model, VF_CNN)):
-                        model.compute_syn_grads(x, y, neurons_2, neurons_3, (beta_2, - beta_2), criterion)
+                        model.compute_syn_grads(x, y, neurons_2, neurons_3, (beta_2, beta_3), criterion)
                     else:
                         if model.same_update:
-                            model.compute_syn_grads(x, y, neurons_2, neurons_3, (beta_2, - beta_2), criterion)
+                            model.compute_syn_grads(x, y, neurons_2, neurons_3, (beta_2, beta_3), criterion)
                         else:    
-                            model.compute_syn_grads(x, y, neurons_1, neurons_2, (beta_2, - beta_2), criterion, neurons_3=neurons_3)
+                            model.compute_syn_grads(x, y, neurons_1, neurons_2, (beta_2, beta_3), criterion, neurons_3=neurons_3)
                 else:
-                    model.compute_syn_grads(x, y, neurons_1, neurons_2, betas, criterion)
+                    model.compute_syn_grads(x, y, neurons_1, neurons_2, betas[:2], criterion)
+                #if reconstruct: # hebbian update on clean input
+                #    model.zero_grad()
+                #    neurons = copy(neurons_1)
+                #    neurons = model(origx, y, neurons, 0, beta = beta_1, criterion=criterion)
+                #    neurons[0] = x
+                #    phi = model.Phi(model.targetneurons, neurons, model.betas, model.fullclamping, criterion=criterion)
+                #    (-1*phi.sum()).backward()
+                #    optimizer.step()
 
                 optimizer.step()      
                 if hasattr(model, 'postupdate'):
@@ -1627,29 +1667,40 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     RMSE(BPTT, EP)
 
             if reconstruct:
-                recon_err = (- (x - neurons[0]).norm(2)).data.item()
+                recon_err = (- (origx - neurons_1[0]).norm(2)).data.item()
 
                 if tensorboard:
                     batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
                     im = lambda t: ((t-t.min())/(t.max()-t.min())*255).to(torch.uint8)
 
-                    img_grid = torchvision.utils.make_grid(im((x*model.fullclamping[0])[:16].data.cpu()))
-                    # matplotlib_imshow(img_grid, one_channel=True)
-                    writer.add_image('clamped input', img_grid, batchiter)
-
-                    img_grid = torchvision.utils.make_grid(im(neurons_1[0][:16].data.cpu()))
-                    # matplotlib_imshow(img_grid, one_channel=True)
-                    writer.add_image('completed input layer', img_grid, batchiter)
-                
-                    img_grid = torchvision.utils.make_grid(im(neurons_2[0][:16].data.cpu()))
-                    # matplotlib_imshow(img_grid, one_channel=True)
-                    writer.add_image('nudged input layer', img_grid, batchiter)
-
                     img_grid = torchvision.utils.make_grid(im(x.data.cpu()[:16]))
                     # matplotlib_imshow(img_grid, one_channel=True)
                     writer.add_image('original input', img_grid, batchiter)
 
-                    recon_err = (- (x - neurons[0]).norm(2)).data.item()
+                    model(x, y, neurons, beta=beta_1, T=0) # make it set up targetneurons
+                    img_grid = torchvision.utils.make_grid(im((model.targetneurons[0])[:16].data.cpu()))
+                    # matplotlib_imshow(img_grid, one_channel=True)
+                    writer.add_image('input force, phase 1', img_grid, batchiter)
+
+                    img_grid = torchvision.utils.make_grid(im(neurons_1[0][:16].data.cpu()))
+                    # matplotlib_imshow(img_grid, one_channel=True)
+                    writer.add_image('completed input layer, phase 1', img_grid, batchiter)
+                
+                    model(origx, y, neurons, beta=beta_2, T=0) # make it set up targetneurons
+                    img_grid = torchvision.utils.make_grid(im((model.targetneurons[0])[:16].data.cpu()))
+                    # matplotlib_imshow(img_grid, one_channel=True)
+                    writer.add_image('input force, phase 2', img_grid, batchiter)
+
+                    img_grid = torchvision.utils.make_grid(im(neurons_2[0][:16].data.cpu()))
+                    # matplotlib_imshow(img_grid, one_channel=True)
+                    writer.add_image('completed input layer, phase 2 (hebbian)', img_grid, batchiter)
+
+                    if thirdphase:
+                        img_grid = torchvision.utils.make_grid(im(neurons_3[0][:16].data.cpu()))
+                        # matplotlib_imshow(img_grid, one_channel=True)
+                        writer.add_image('completed input layer, phase 3 (antihebbian)', img_grid, batchiter)
+
+
                     writer.add_scalars('reconstruct', {'recon_err': recon_err,}, batchiter)
 
                     writer.close()

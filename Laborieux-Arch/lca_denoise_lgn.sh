@@ -2,17 +2,17 @@
 python ../main.py \
     --model 'DenoiseLCALGNCNN' \
     --task 'CIFAR10' \
-    --channels 512 \
-    --kernels 5 \
-    --pools 'ammm' \
-    --strides 1  \
-    --paddings 1  \
+    --channels 128  \
+    --kernels 3 \
+    --pools 'iamm' \
+    --strides 1 1 \
+    --paddings 2 1 \
     --fc 10 \
     --sparse-layers 0 \
     --inhibitstrength 1.0 \
-    --lambdas 0.1 \
+    --lambdas 0.0 \
     --competitiontype 'feature_inner_products' \
-    --comp-syn-constraints 'rowunitnorm,zerodiag,transposesymmetric' \
+    --comp-syn-constraints 'colunitnorm,zerodiag,transposesymmetric' \
     --optim 'sgd' \
     --mmt 0.9 \
     --lrs 0.25 0.1 \
@@ -20,16 +20,16 @@ python ../main.py \
     --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
     --act 'my_hard_sig' \
     --todo 'train' \
-    --betas 0.0 0.5 \
+    --betas 0.0 0.5 -0.5 \
     --thirdphase \
-    --T1 250 \
-    --T2 25 \
+    --T1 150 \
+    --T2 150 \
     --mbs 128 \
     --loss 'mse' \
     --data-aug \
     --save  \
-    --device 1 \
+    --device 0 \
     --seed $1 \
     --epochs 120 \
     --tensorboard \
-    --dt 0.25 \
+    --dt 0.1 \

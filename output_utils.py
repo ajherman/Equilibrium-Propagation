@@ -76,6 +76,8 @@ parser.add_argument('--cpu', default = False, action = 'store_true', help='use C
 
 parser.add_argument('--noise', type=float, default = 0.0,  help='standard deviation of guassian noise added to training data')
 
+parser.add_argument('--dt', type=float, default = 1.0,  help='timestep for model dynamics. Decay time constant = 1.0')
+
 
 def getruns(prefix='./', pathpattern = 'results/*/*/*/*/', map_device=torch.device('cpu')):
     runs = []

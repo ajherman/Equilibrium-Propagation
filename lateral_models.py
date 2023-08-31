@@ -704,13 +704,13 @@ class latCompCNN(lat_CNN):
 
         #        neurons[-1].retain_grad()
         #else:
-        [n.requires_grad_(False) for n in neurons if n.is_leaf]
-        [g.requires_grad_(False) for g in grads if g.is_leaf]
+        #[n.requires_grad_(False) for n in neurons if n.is_leaf]
+        #[g.requires_grad_(False) for g in grads if g.is_leaf]
         for t in range(T):
-            #phi = self.Phi(x, y, neurons, beta, criterion)
-            #grads = torch.autograd.grad(phi, neurons, grad_outputs=self.init_grads, create_graph=False)
-            [g.zero_() for g in grads]
-            grads = self.dPhi(grads, x, y, neurons, beta, criterion)
+            phi = self.Phi(x, y, neurons, beta, criterion)
+            grads = torch.autograd.grad(phi, neurons, grad_outputs=self.init_grads, create_graph=False)
+            #[g.zero_() for g in grads]
+            #grads = self.dPhi(grads, x, y, neurons, beta, criterion)
 
             for idx in range(len(neurons)): # -1):
                 neurons[idx] = self.activation( (1-self.dt)*neurons[idx] + self.dt*grads[idx] )

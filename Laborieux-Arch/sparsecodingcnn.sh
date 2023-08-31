@@ -6,7 +6,7 @@ python ../main.py \
     --inhibitstrength 1.0 \
     --lambdas 0.1 \
     --sparse-layers -5 \
-    --comp-syn-constraints 'zerodiag,transposesymmetric' \
+    --comp-syn-constraints 'colunitnorm,zerodiag,transposesymmetric' \
     --dt 0.2 \
     --channels 128 256 512 512 \
     --kernels 3 3 3 3 \
@@ -24,13 +24,12 @@ python ../main.py \
     --todo 'train' \
     --betas 0.0 0.5 \
     --thirdphase \
-    --T1 $3 \
-    --T2 $4 \
+    --T1 250 \
+    --T2 25 \
     --mbs 128 \
     --loss 'mse' \
     --data-aug \
-    --device 0 \
+    --device 1 \
     --seed $1 \
-    --dt $2 \
     --save \
 #    --load-path-convert results/EP/mse/2023-08-03/orig_mse_14-38-36_gpu0_120epochs

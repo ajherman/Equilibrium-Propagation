@@ -100,6 +100,7 @@ class Reversible_CNN(P_CNN):
         self.targetneurons = self.xytotargetneurons(x, y)
         self.betas = self.fieldbeta(beta)
 
+            
         return self.energymodel(self.targetneurons, neurons, T, self.betas, self.fullclamping, criterion, check_thm=check_thm)
 
     def energymodel(self, targetneurons, neurons, T, betas, fullclamping, criterion, check_thm=False):
@@ -128,6 +129,7 @@ class Reversible_CNN(P_CNN):
 
     
             neurons[0] = ((1-self.dt)*neurons[0] + self.dt*grads[0])
+            neurons[0] = torch.minimum(torch.maximum(neurons[0], torch.tensor(-5)), torch.tensor(5))
             #neurons[0].requires_grad = True
 
             for idx in range(1,len(neurons)-1):
@@ -135,11 +137,11 @@ class Reversible_CNN(P_CNN):
                 #neurons[idx].requires_grad = True
 
             # apply full clamping
-#            with torch.no_grad():
-#                for idx in range(len(neurons)):
-#                    if fullclamping[idx].size(0) >  0:
-#                        neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
-#
+            #with torch.no_grad():
+            #    for idx in range(len(neurons)):
+            #        if fullclamping[idx].size(0) >  0:
+            #            neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
+
             ## average the last n neurons in case its a limit cycle
 
         return neurons
@@ -262,7 +264,7 @@ class RevLatCNN(Reversible_CNN, lat_CNN, torch.nn.Module):
 
 
 class RevConvLatCNN(Reversible_CNN, lat_conv_CNN, torch.nn.Module):
-    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_kernels, lat_layer_idxs, lat_constraints, activation=my_sigmoid, softmax=False, inputbeta=0.5, dt=0.5):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_kernels, lat_layer_idxs, lat_constraints, activation=my_sigmoid, softmax=False, inputbeta=0.9, dt=0.5):
         softmax = False
         # super(RevLatCNN, self)
         # note - order of super inits called is important for some reason.
@@ -291,13 +293,15 @@ class RevConvLatCNN(Reversible_CNN, lat_conv_CNN, torch.nn.Module):
 
 
 class RevLCACNN(Reversible_CNN, latCompCNN, torch.nn.Module):
-    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs=[-1], comp_syn_constraints=['zerodiag+transposesymmetric'], activation=hard_sigmoid, softmax=False, layerlambdas=[1.0e-2], inputbeta=0.5, dt=1.0):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs=[-1], comp_syn_constraints=['zerodiag+transposesymmetric'], activation=hard_sigmoid, softmax=False, layerlambdas=[1.0e-2], dt=1.0):# inputbeta=inputbeta,
         softmax = False
         # super(RevLatCNN, self)
         # note - order of super inits called is important for some reason.
-        Reversible_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax, inputbeta=inputbeta, dt=dt)
+        Reversible_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax, dt=dt, inputbeta=0.0)
         self.call_super_init = False # prevents pytorch from clearing all the paramters added by the first init
-        latCompCNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs, comp_syn_constraints, activation=activation, softmax=softmax, layerlambdas=layerlambdas, dt=dt)
+        self.comp_syn_constraints = [comp_syn_constraints[0] + ',colunitnorm'] # normalize initial weights to unit norm, but not in subsequent updates
+        latCompCNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs, self.comp_syn_constraints, activation=activation, softmax=softmax, layerlambdas=layerlambdas, dt=dt)
+        self.comp_syn_constraints = comp_syn_constraints # no col unit norm in subsequent updates (unless specified)
         print('sll', self.lat_layer_idxs, self.lat_syn)
         for i in range(len(self.lat_layer_idxs)):
             self.lat_layer_idxs[i] += 1 # input layer is now in system, shift indexes by one
@@ -305,6 +309,58 @@ class RevLCACNN(Reversible_CNN, latCompCNN, torch.nn.Module):
 #            self.conv_lat_layer_idxs[i] += 1 # input layer is now in system, shift indexes by one
 #        for i in range(len(self.sparse_layer_idxs)):
 #            self.sparse_layer_idxs[i] += 1 # input layer is now in system, shift indexes by one
+
+    def postupdate(self):
+        latCompCNN.postupdate(self)
+        with torch.no_grad():
+            #self.synapses[0].bias.fill_(-0.35)
+            #self.synapses[0].weight.data /= self.synapses[0].weight.norm(2, dim=(0,2,3))[None,:,None,None]
+            for i, constraint in enumerate(self.comp_syn_constraints):
+                if 'colunitnorm' in constraint:
+                    idx = self.sparse_layer_idxs[i]
+                    if isinstance(self.synapses[idx], torch.nn.Conv2d):
+                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(1, dim=(0,2,3))[None,:,None,None] / 400
+                    elif isinstance(self.synapses[idx], torch.nn.Linear):
+                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(1, dim=0)[None,:] / 400 # somewhere between 100 and 400. super sensitive due to feedback
+
+    def mode(self, trainclassifier=True, trainreconstruct=False, noisebeta=False):
+        self.trainclassifier = trainclassifier
+        self.trainreconstruct = trainreconstruct
+        self.noisebeta = noisebeta
+
+    def fieldbeta(self, beta):
+        for idx in range(len(self.betas)):
+            self.betas[idx].zero_()
+        # nudge on input for reconstruction of unclamped portion
+        #if self.trainreconstruct:# and not self.noisebeta:
+        self.betas[0].fill_(self.inputbeta + beta)
+        #else:
+        #    self.betas[0].fill_(self.inputbeta)
+        # nudge for classification
+        if self.trainclassifier:
+            self.betas[-1].fill_(beta)
+
+        return self.betas
+
+    def forward(self, x, y, neurons, T, beta=0.0, criterion=torch.nn.MSELoss(reduction='none'), check_thm=False):
+        #torch.nn.MSELoss(reduction='none')
+        for idx in range(len(neurons)):
+            if neurons[idx].is_leaf:
+                neurons[idx].requires_grad_(False)
+
+        #neurons = Reversible_CNN.forward(self, x, y, neurons, T, beta=beta, criterion=self.criterion, check_thm=False)#check_thm)
+        # not_mse = (criterion.__class__.__name__.find('MSE')==-1)
+        mbs = x.size(0)
+        device = x.device
+
+        #x = AddGaussianNoise(0.0, 0.1)(x)
+        self.betas = self.fieldbeta(beta)
+        #if self.noisebeta:
+        #    b = beta + self.inputbeta
+        #    x = (1-b)*torch.randn_like(x) + b*x
+        self.targetneurons = self.xytotargetneurons(x, y)
+
+        return self.energymodel(self.targetneurons, neurons, T, self.betas, self.fullclamping, criterion, check_thm=False)
 
     def Phi(self, targetneurons, neurons, betas, fullclamping, criterion):
         phi = Reversible_CNN.Phi(self, targetneurons, neurons, betas, fullclamping, criterion)

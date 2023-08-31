@@ -342,7 +342,7 @@ else:
 model.to(device)
 print(model)
 
-betas = args.betas[0], args.betas[1]
+betas = args.betas#[0], args.betas[1]
 
 
 if args.todo=='train':
