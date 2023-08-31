@@ -7,29 +7,28 @@ python ../main.py \
     --pools 'iamm' \
     --strides 1 1 \
     --paddings 2 1 \
-    --fc 10 \
-    --sparse-layers 0 \
+    --sparse-layers 0 1 \
+    --fc 1 \
     --inhibitstrength 1.0 \
-    --lambdas 0.0 \
+    --lambdas 0.2 100.0 \
     --competitiontype 'feature_inner_products' \
-    --comp-syn-constraints 'colunitnorm,zerodiag,transposesymmetric' \
+    --comp-syn-constraints 'fixedlambda,zerodiag,transposesymmetric' \
     --optim 'sgd' \
     --mmt 0.9 \
-    --lrs 0.25 0.1 \
+    --lrs 0.05 0.0 \
     --lr-decay \
     --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
     --act 'my_hard_sig' \
     --todo 'train' \
     --betas 0.0 0.5 -0.5 \
-    --thirdphase \
     --T1 150 \
-    --T2 150 \
+    --T2 0 \
     --mbs 128 \
     --loss 'mse' \
     --data-aug \
     --save  \
-    --device 0 \
+    --device 1 \
     --seed $1 \
     --epochs 120 \
     --tensorboard \
-    --dt 0.1 \
+    --dt 0.2 \

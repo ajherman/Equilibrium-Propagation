@@ -7,7 +7,7 @@ python ../main.py \
     --lambdas 0.1 \
     --sparse-layers -5 \
     --comp-syn-constraints 'colunitnorm,zerodiag,transposesymmetric' \
-    --dt 0.2 \
+    --dt 0.15 \
     --channels 128 256 512 512 \
     --kernels 3 3 3 3 \
     --pools 'mmmm' \
@@ -22,14 +22,14 @@ python ../main.py \
     --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
     --act 'my_hard_sig' \
     --todo 'train' \
-    --betas 0.0 0.5 \
+    --betas 0.0 2.0 \
     --thirdphase \
     --T1 250 \
-    --T2 25 \
+    --T2 250 \
     --mbs 128 \
     --loss 'mse' \
     --data-aug \
-    --device 1 \
+    --device 0 \
     --seed $1 \
     --save \
 #    --load-path-convert results/EP/mse/2023-08-03/orig_mse_14-38-36_gpu0_120epochs

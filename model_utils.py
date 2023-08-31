@@ -1291,6 +1291,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
     reconstructfreq = 1 # train reconstruct on 1 of x batches
     minreconstructepoch = 0
     maxreconstructepoch = 10
+    floatdur = 0
     #isreconstructmodel = issubclass(model.__class__, ReversibleCNN) #False # disable reconstruction trianing
 
     for epoch in range(epochs):
@@ -1345,7 +1346,11 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     if not isreconstructmodel:
                         phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
                 if reconstruct:
-                    for t in range(50):
+                    with torch.no_grad():
+                        #neurons_1[0].zero_()
+                        neurons[0] = F.conv_transpose2d(neurons[1], model.synapses[0].weight, padding=model.synapses[0].padding)
+                    model.fullclamping[0].fill_(False)
+                    for t in range(floatdur):
                         lastneurons = copy(neurons)
                         neurons = model(x, y, neurons, 1, beta=0.0, criterion=criterion)
                         [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
@@ -1365,7 +1370,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 for layeridx in range(N):
                     fig.add_subplot(2, N//2+1, layeridx+1)
                     if reconstruct:
-                        plt.plot(range(T1+50+T2), l2s[layeridx])
+                        plt.plot(range(T1+floatdur+T2), l2s[layeridx])
                     else:
                         plt.plot(range(T1+T2), l2s[layeridx])
                     plt.title('L2 change in neurons of layer '+str(layeridx+1))
@@ -1401,7 +1406,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 model.mode(trainclassifier=classifyalso, trainreconstruct=True)#, noisebeta=True)#(torch.randn((1,)).item() < 0.5))
                 
                 origx = x.clone()
-                x = AddGaussianNoise(0.0, 0.1)(x)
+                #x = AddGaussianNoise(0.0, 0.1)(x)
+
                 #neurons = model(x, y, neurons, T1, beta_2)
                 #print(neurons)
                 #hebbian_syn_grads(model, x, y, neurons, beta_2, criterion, 1)
@@ -1540,7 +1546,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     #neurons_1[0].zero_()
                     neurons_1[0] = F.conv_transpose2d(neurons_1[1], model.synapses[0].weight, padding=model.synapses[0].padding)
                 model.fullclamping[0].fill_(False)
-                neurons_1 = model(torch.zeros_like(x), y, neurons_1, 20, beta=0.0)
+                neurons_1 = model(torch.zeros_like(x), y, neurons_1, floatdur, beta=0.0)
                 print('after float ', [n.norm(2).item() for n in neurons_1])
             
             
@@ -1553,6 +1559,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
             
                 if reconstruct:
                     #x = origx # remove noise, to nudge for denoising
+                    model.fullclamping[0].fill_(True)
                     neurons = model(origx, y, neurons, T2, beta = beta_2, criterion=criterion)
                 else:
                     neurons = model(x, y, neurons, T2, beta = beta_2, criterion=criterion)

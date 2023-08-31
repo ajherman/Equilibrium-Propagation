@@ -570,19 +570,19 @@ class latCompCNN(lat_CNN):
                         # remove self-connections (same feature to same feature to the same pixel -> [rowidx, rowidx, centerx, centery])
                         centerx = math.floor(layer.kernel_size[0]/2)
                         centery = math.floor(layer.kernel_size[1]/2)
-                        layer.weight[rowidx,rowidx,centerx,centery].zero_()
+                        #layer.weight[rowidx,rowidx,centerx,centery].zero_()
                         #layer.bias.zero_()
-                        layer.bias.fill_(-self.layerlambdas[j])
+                        #layer.bias.fill_(-self.layerlambdas[j])
 
-                conv_comp_len = j
+                conv_comp_len = j+1
                 for j, layer in enumerate(self.fc_comp_layers):
-                    idx = self.sparse_layer.idxs[j+conv_comp_len]
+                    idx = self.sparse_layer_idxs[j+conv_comp_len]
                     features = self.synapses[idx].weight.data #/ self.synapses[idx].weight.data.norm(2, dim=1)[:,None]
                     for rowidx in range(features.size(0)):
                         layer.weight[:,rowidx] = - self.inhibitstrength * (features * features[rowidx,:]).sum(dim=1)
-                        layer.weight[rowidx,rowidx].zero_()
+                        #layer.weight[rowidx,rowidx].zero_()
                         #layer.bias.zero_()
-                        layer.bias.fill_(-self.layerlambdas[j+conv_comp_len])
+                        #layer.bias.fill_(-self.layerlambdas[j+conv_comp_len])
                     layer.weight.data = layer.weight.data.contiguous() # setting columns with rows makes it column rather than row major in memory
             elif self.competitiontype == 'uniform_inhibition':
                 for layer in self.conv_comp_layers:
@@ -629,6 +629,8 @@ class latCompCNN(lat_CNN):
                         self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=(0,2,3))[None,:,None,None]
                     elif isinstance(self.synapses[idx], torch.nn.Linear):
                         self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=0)[None,:]
+                if 'fixedlambda' in constraint:
+                    self.conv_comp_layers[i].bias.fill_(-self.layerlambdas[i])
                 
                 #self.synapses[idx].bias.fill_(-self.layerlambdas[j])
 

@@ -25,9 +25,10 @@ class Reversible_CNN(P_CNN):
         self.trainreconstruct = trainreconstruct
 
     def postupdate(self):
-        with torch.no_grad():
+        pass
+        #with torch.no_grad():
             #self.synapses[0].bias.fill_(-0.35)
-            self.synapses[0].weight.data /= self.synapses[0].weight.norm(2, dim=(0,2,3))[None,:,None,None]
+            #self.synapses[0].weight.data /= self.synapses[0].weight.norm(2, dim=(0,2,3))[None,:,None,None]
 
     def Phi(self, targetneurons, neurons, betas, fullclamping, criterion):
 
@@ -111,8 +112,8 @@ class Reversible_CNN(P_CNN):
         # apply full clamping
 #        with torch.no_grad():
         for idx in range(len(neurons)):
-#                if fullclamping[idx].size(0) >  0:
-#                    neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
+            if fullclamping[idx].size(0) >  0:
+                neurons[idx][fullclamping[idx]] = targetneurons[idx][fullclamping[idx]]
             if neurons[idx].is_leaf:
                 neurons[idx].requires_grad = True
 
@@ -299,7 +300,7 @@ class RevLCACNN(Reversible_CNN, latCompCNN, torch.nn.Module):
         # note - order of super inits called is important for some reason.
         Reversible_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax, dt=dt, inputbeta=0.0)
         self.call_super_init = False # prevents pytorch from clearing all the paramters added by the first init
-        self.comp_syn_constraints = [comp_syn_constraints[0] + ',colunitnorm'] # normalize initial weights to unit norm, but not in subsequent updates
+        self.comp_syn_constraints = comp_syn_constraints#[comp_syn_constraints[0] + ',colunitnorm'] # normalize initial weights to unit norm, but not in subsequent updates
         latCompCNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs, self.comp_syn_constraints, activation=activation, softmax=softmax, layerlambdas=layerlambdas, dt=dt)
         self.comp_syn_constraints = comp_syn_constraints # no col unit norm in subsequent updates (unless specified)
         print('sll', self.lat_layer_idxs, self.lat_syn)
@@ -319,9 +320,9 @@ class RevLCACNN(Reversible_CNN, latCompCNN, torch.nn.Module):
                 if 'colunitnorm' in constraint:
                     idx = self.sparse_layer_idxs[i]
                     if isinstance(self.synapses[idx], torch.nn.Conv2d):
-                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(1, dim=(0,2,3))[None,:,None,None] / 400
+                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=(0,2,3))[None,:,None,None]
                     elif isinstance(self.synapses[idx], torch.nn.Linear):
-                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(1, dim=0)[None,:] / 400 # somewhere between 100 and 400. super sensitive due to feedback
+                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=0)[None,:] 
 
     def mode(self, trainclassifier=True, trainreconstruct=False, noisebeta=False):
         self.trainclassifier = trainclassifier
@@ -375,10 +376,12 @@ class RevLCACNN(Reversible_CNN, latCompCNN, torch.nn.Module):
         for j, layer in enumerate(self.conv_comp_layers):
             idx = self.sparse_layer_idxs[j] + 1
             phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=(1,2,3))
+            phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
 
         for j, layer in enumerate(self.fc_comp_layers):
             idx = self.sparse_layer_idxs[j+len(self.conv_comp_layers)] + 1
             phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=1)
+            phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
 
         return phi
 # absolute disgusting kludge. why do I have to do this in pytorch just to use JIT with cuda
