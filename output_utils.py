@@ -2,6 +2,7 @@ import glob
 import torch
 # import re
 import argparse
+import os
 
 # copied from main.py
 parser = argparse.ArgumentParser(description='Eqprop')
@@ -83,7 +84,7 @@ def getruns(prefix='./', pathpattern = 'results/*/*/*/*/', map_device=torch.devi
     runs = []
     for rundir in glob.glob(prefix+pathpattern):
         checkptfile = glob.glob(rundir+'checkpoint.tar')
-        if len(checkptfile) > 0:
+        if len(checkptfile) > 0 and os.path.isfile(rundir + 'hyperparameters.txt'):
             statedict = torch.load(checkptfile[0], map_location=map_device)
 #         else:
 #             statedict = {'train_acc': [0.0], 'test_acc': [0.0]}

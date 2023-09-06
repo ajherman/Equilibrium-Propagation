@@ -1328,7 +1328,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
             x, y = x.to(device), y.to(device)
             mbs = x.size(0)
 
-            reconstruct = isreconstructmodel and int(idx%reconstructfreq) == 0 and epoch >= minreconstructepoch and epoch < maxreconstructepoch
+            reconstruct = (model.__class__.__name__ == 'LCACNN') #isreconstructmodel and int(idx%reconstructfreq) == 0 and epoch >= minreconstructepoch and epoch < maxreconstructepoch
 
             neurons = model.init_neurons(mbs, device)
 
@@ -1342,10 +1342,11 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 #reconstructmask = torch.stack([masktransform(torch.ones_like(x[0])) for i in range(mbs)])
                 #model.fullclamping[0] = reconstructmask.bool()
                 classifyalso = False#torch.rand((1,)).item() < 0.1 # this percent of the time, simulataneoulsy nudge the classification
-                model.mode(trainclassifier=classifyalso, trainreconstruct=True)#, noisebeta=True)#(torch.randn((1,)).item() < 0.5))
+                #model.mode(trainclassifier=classifyalso, trainreconstruct=True)#, noisebeta=True)#(torch.randn((1,)).item() < 0.5))
                 
-                origx = x.clone()
-                #x = AddGaussianNoise(0.0, 0.1)(x)
+                #origx = x.clone()
+                #if torch.randn((1,)).item() < 0.5:
+                #    x = AddGaussianNoise(0.0, 0.2)(x)
 
                 #neurons = model(x, y, neurons, T1, beta_2)
                 #print(neurons)
@@ -1484,8 +1485,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 with torch.no_grad():
                     #neurons_1[0].zero_()
                     neurons_1[0] = F.conv_transpose2d(neurons_1[1], model.synapses[0].weight, padding=model.synapses[0].padding)
-                model.fullclamping[0].fill_(False)
-                neurons_1 = model(torch.zeros_like(x), y, neurons_1, floatdur, beta=0.0)
+                #model.fullclamping[0].fill_(False)
+                #neurons_1 = model(torch.zeros_like(x), y, neurons_1, floatdur, beta=0.0)
                 #print('after float ', [n.norm(2).item() for n in neurons_1])
             
             
@@ -1535,7 +1536,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 
                 if reconstruct:
                     #print('grads mean', [l.weight.grad.mean().item() for l in model.synapses], 'grads max', [l.weight.grad.max().item() for l in model.synapses], 'grads min', [l.weight.grad.min().item() for l in model.synapses])
-                    model.synapses[0].weight.grad.div_(neurons[1].norm(0, dim=(0,2,3))[:,None,None,None] +1.0) # average gradient by amount the feature was active in the batch
+                    model.synapses[0].weight.grad.div_(neurons[1].norm(1, dim=(0,2,3))[:,None,None,None]/2 +1.0) # average gradient by amount the feature was active in the batch
                     #print('grads mean', [l.weight.grad.mean().item() for l in model.synapses], 'grads max', [l.weight.grad.max().item() for l in model.synapses], 'grads min', [l.weight.grad.min().item() for l in model.synapses])
                 optimizer.step()      
                 if hasattr(model, 'postupdate'):
@@ -1598,11 +1599,11 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 optimizer.step()
 
             if reconstruct:
-                recon_err = (- (origx - neurons_1[0]).norm(2)).data.item()
+                recon_err = ( (origx - neurons_1[0]).norm(2)).data.item()
 
                 if tensorboard:
                     batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
-                    im = lambda t: ((t-t.min())/(t.max()-t.min())*255).to(torch.uint8)
+                    im = lambda t: ((t+1)/2*255).to(torch.uint8)
 
                     img_grid = torchvision.utils.make_grid(im(x.data.cpu()[:16]))
                     # matplotlib_imshow(img_grid, one_channel=True)
@@ -1659,12 +1660,12 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     noisify = AddGaussianNoise(0.0, 0.1)
                     noisyx = noisify(origx)
                     neurons = model.init_neurons(origx.size(0), origx.device)
-                    model.fullclamping[0].fill_(True)
+                    #model.fullclamping[0].fill_(True)
                     neurons = model(noisyx, y, neurons, T1, beta_1)
                     with torch.no_grad():
                         #tneurons_1[0].zero_()
                         neurons[0] = F.conv_transpose2d(neurons[1], model.synapses[0].weight, padding=model.synapses[0].padding)
-                    model.fullclamping[0].fill_(False)
+                    #model.fullclamping[0].fill_(False)
                     neurons = model(noisyx, y, neurons, T2, beta_2)
 
                     denoise_err = (neurons[0] - origx).norm(2).item()
@@ -1673,61 +1674,62 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                         batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
                         writer.add_scalars('denoising', {'recon vs clean err': denoise_err,}, batchiter)
 
-                # plot how much the neurons are changing to know when it equilibrates
-                neurons = model.init_neurons(mbs, device)
-                l2s = [[] for i in range(len(neurons))]
-                phis = []
-                for t in range(T1):
-                    lastneurons = copy(neurons)
-                    neurons = model(x, y, neurons, 1, beta=beta_1, criterion=criterion)
-                    [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
-                    if not isreconstructmodel:
-                        phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
-                if reconstruct:
-                    with torch.no_grad():
-                        #neurons_1[0].zero_()
-                        neurons[0] = F.conv_transpose2d(neurons[1], model.synapses[0].weight, padding=model.synapses[0].padding)
-                    model.fullclamping[0].fill_(False)
-                    for t in range(floatdur):
+                if save:
+                    # plot how much the neurons are changing to know when it equilibrates
+                    neurons = model.init_neurons(mbs, device)
+                    l2s = [[] for i in range(len(neurons))]
+                    phis = []
+                    for t in range(T1):
                         lastneurons = copy(neurons)
-                        neurons = model(x, y, neurons, 1, beta=0.0, criterion=criterion)
+                        neurons = model(x, y, neurons, 1, beta=beta_1, criterion=criterion)
                         [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
                         if not isreconstructmodel:
                             phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
-                # also plot histogram of neuron values
-                plot_neural_activity(neurons, path, suff=epoch)
-                for t in range(T2):
-                    lastneurons = copy(neurons)
-                    neurons = model(x, y, neurons, 1, beta=beta_2, criterion=criterion)
-                    [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
-                    if not isreconstructmodel:
-                        phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
-                plot_neural_activity(neurons, path, suff=str(epoch_sofar+epoch)+'_nudged')
-                N = len(neurons)
-                fig = plt.figure(figsize=(3*N,6))
-                for layeridx in range(N):
-                    fig.add_subplot(2, N//2+1, layeridx+1)
                     if reconstruct:
-                        plt.plot(range(T1+floatdur+T2), l2s[layeridx])
-                    else:
-                        plt.plot(range(T1+T2), l2s[layeridx])
-                    plt.title('L2 change in neurons of layer '+str(layeridx+1))
-                    plt.xlabel('time step')
-                    plt.yscale('log')
-                    plt.axvline(x=T1, linestyle=':')
-                fig.savefig(path + '/neural_equilibrating_{}.png'.format(epoch_sofar+epoch))
-                plt.close()
-
-                if not isreconstructmodel:
-                    fig = plt.figure()
-                    plt.plot(range(T1+T2), phis)
-                    plt.title('Energy Function (Phi) over Model Dynamics Evolution')
-                    plt.xlabel('time step')
-                    plt.ylabel('energy')
-                    plt.axvline(x=T1, linestyle=':')
-                    plt.tight_layout()
-                    fig.savefig(path + '/phi_evolution_{}.png'.format(epoch_sofar+epoch))
+                        with torch.no_grad():
+                            #neurons_1[0].zero_()
+                            neurons[0] = F.conv_transpose2d(neurons[1], model.synapses[0].weight, padding=model.synapses[0].padding)
+                        #model.fullclamping[0].fill_(False)
+                        for t in range(floatdur):
+                            lastneurons = copy(neurons)
+                            neurons = model(x, y, neurons, 1, beta=0.0, criterion=criterion)
+                            [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
+                            if not isreconstructmodel:
+                                phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
+                    # also plot histogram of neuron values
+                    plot_neural_activity(neurons, path, suff=epoch)
+                    for t in range(T2):
+                        lastneurons = copy(neurons)
+                        neurons = model(x, y, neurons, 1, beta=beta_2, criterion=criterion)
+                        [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
+                        if not isreconstructmodel:
+                            phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
+                    plot_neural_activity(neurons, path, suff=str(epoch_sofar+epoch)+'_nudged')
+                    N = len(neurons)
+                    fig = plt.figure(figsize=(3*N,6))
+                    for layeridx in range(N):
+                        fig.add_subplot(2, N//2+1, layeridx+1)
+                        if reconstruct:
+                            plt.plot(range(T1+floatdur+T2), l2s[layeridx])
+                        else:
+                            plt.plot(range(T1+T2), l2s[layeridx])
+                        plt.title('L2 change in neurons of layer '+str(layeridx+1))
+                        plt.xlabel('time step')
+                        plt.yscale('log')
+                        plt.axvline(x=T1, linestyle=':')
+                    fig.savefig(path + '/neural_equilibrating_{}.png'.format(epoch_sofar+epoch))
                     plt.close()
+
+                    if not isreconstructmodel:
+                        fig = plt.figure()
+                        plt.plot(range(T1+T2), phis)
+                        plt.title('Energy Function (Phi) over Model Dynamics Evolution')
+                        plt.xlabel('time step')
+                        plt.ylabel('energy')
+                        plt.axvline(x=T1, linestyle=':')
+                        plt.tight_layout()
+                        fig.savefig(path + '/phi_evolution_{}.png'.format(epoch_sofar+epoch))
+                        plt.close()
 
             
             if tensorboard:

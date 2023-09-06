@@ -509,7 +509,7 @@ class lat_conv_CNN(lat_CNN):
 
 
 # lateral inhibition locally in convolutional layer to encourage sparsity, robustness
-class latCompCNN(lat_CNN):
+class LCACNN(lat_CNN):
     def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs=[-1], comp_syn_constraints=['zerodiag+transposesymmetric'], activation=hard_sigmoid, softmax=False, layerlambdas=[1.0e-2], dt=1.0):
         self.layerlambdas = layerlambdas
         self.inhibitstrength = inhibitstrength*0.5 # used in an energy function rather than EOM, need 1/2 coefficient (vector is squared). derivative then is 1*feature inner products
@@ -568,8 +568,8 @@ class latCompCNN(lat_CNN):
                     for rowidx in range(features.size(0)):
                         layer.weight[rowidx,:,:,:] = (- self.inhibitstrength * (features * features[rowidx,:,:,:]).sum(dim=(1,2,3)))[None,:,None,None].expand(1, -1, layer.kernel_size[0], layer.kernel_size[1])
                         # remove self-connections (same feature to same feature to the same pixel -> [rowidx, rowidx, centerx, centery])
-                        centerx = math.floor(layer.kernel_size[0]/2)
-                        centery = math.floor(layer.kernel_size[1]/2)
+                        #centerx = math.floor(layer.kernel_size[0]/2)
+                        #centery = math.floor(layer.kernel_size[1]/2)
                         #layer.weight[rowidx,rowidx,centerx,centery].zero_()
                         #layer.bias.zero_()
                         #layer.bias.fill_(-self.layerlambdas[j])
@@ -595,27 +595,8 @@ class latCompCNN(lat_CNN):
     def postupdate(self, setlat=True):
         lat_CNN.postupdate(self)
         
-        if setlat:
-            self.setlat()
-        
         with torch.no_grad():
             for i, constraint in enumerate(self.comp_syn_constraints):
-                if i < len(self.conv_comp_layers):
-                    layer = self.conv_comp_layers[i]
-                    if 'zerodiag' in constraint:
-                        # zero diagonal to remove self-interaction
-                        centerx = math.floor(layer.kernel_size[0]/2)
-                        centery = math.floor(layer.kernel_size[1]/2)
-                        layer.weight[:,:,centerx,centery] -= torch.diag(torch.diag(layer.weight[:,:,centerx,centery]))
-                else:
-                    layer = self.fc_comp_layers[i-len(self.conv_comp_layers)]
-                    if 'zerodiag' in constraint:
-                        layer.weight -= torch.diag(torch.diag(layer.weight))
-                if 'transposesymmetric' in constraint:
-                    layer.weight.data = 0.5*(layer.weight.data + layer.weight.data.transpose(0,1)) # order is important, otherwise it will be transposed in memory
-                if 'negReLu' in constraint:
-                    layer.weight.data = -F.relu(-layer.weight.data)
-
             #for j, idx in enumerate(self.sparse_layer_idxs):
             #    # cosntrain the input features to sparse coding layers to norm 1
                 idx = self.sparse_layer_idxs[i]
@@ -634,6 +615,27 @@ class latCompCNN(lat_CNN):
                     self.synapses[idx].bias.fill_(-self.layerlambdas[i])
                 
                 #self.synapses[idx].bias.fill_(-self.layerlambdas[j])
+        if setlat:
+            self.setlat()
+        
+        with torch.no_grad():
+            for i, constraint in enumerate(self.comp_syn_constraints):
+                if i < len(self.conv_comp_layers):
+                    layer = self.conv_comp_layers[i]
+                    if 'zerodiag' in constraint:
+                        # zero diagonal to remove self-interaction
+                        centerx = math.floor(layer.kernel_size[0]/2)
+                        centery = math.floor(layer.kernel_size[1]/2)
+                        layer.weight[:,:,centerx,centery] -= torch.diag(torch.diag(layer.weight[:,:,centerx,centery]))
+                else:
+                    layer = self.fc_comp_layers[i-len(self.conv_comp_layers)]
+                    if 'zerodiag' in constraint:
+                        layer.weight -= torch.diag(torch.diag(layer.weight))
+                if 'transposesymmetric' in constraint:
+                    layer.weight.data = 0.5*(layer.weight.data + layer.weight.data.transpose(0,1)) # order is important, otherwise it will be transposed in memory
+                if 'negrelu' in constraint:
+                    layer.weight.data = -F.relu(-layer.weight.data)
+
 
 
     def Phi(self, x, y, neurons, beta, criterion):
@@ -706,16 +708,29 @@ class latCompCNN(lat_CNN):
         #else:
         #[n.requires_grad_(False) for n in neurons if n.is_leaf]
         #[g.requires_grad_(False) for g in grads if g.is_leaf]
+        
         for t in range(T):
+            [n.requires_grad_(True) for n in neurons]
             phi = self.Phi(x, y, neurons, beta, criterion)
-            grads = torch.autograd.grad(phi, neurons, grad_outputs=self.init_grads, create_graph=False)
+            #grads = torch.autograd.grad(phi, neurons, grad_outputs=self.init_grads, create_graph=False)
+            phi.sum().backward()
             #[g.zero_() for g in grads]
             #grads = self.dPhi(grads, x, y, neurons, beta, criterion)
 
+            for j, idx in enumerate(self.sparse_layer_idxs):
+                self.membranepotentials[j].mul_(1-self.dt) # L2 decay on membrane potential
+                self.membranepotentials[j].add_(self.dt*(neurons[idx].grad)) # integrate neuron input
+
             for idx in range(len(neurons)): # -1):
-                neurons[idx] = self.activation( (1-self.dt)*neurons[idx] + self.dt*grads[idx] )
+                if idx not in self.sparse_layer_idxs:
+                    neurons[idx].mul_(1-self.dt) # L2 decay 
+                    neurons[idx].add_(self.dt*neurons[idx].grad)
+                #neurons[idx] = self.activation( (1-self.dt)*neurons[idx] + self.dt*grads[idx] )
                 #neurons[idx] = self.activation( grads[idx] )
                 #neurons[idx].requires_grad = True
+
+            for j, idx in enumerate(self.sparse_layer_idxs):
+                neurons[idx] = self.activation(self.membranepotentials[j] - self.layerlambdas[j])
          
             #if not_mse and not(self.softmax):
             #    neurons[-1] = grads[-1]
@@ -726,8 +741,13 @@ class latCompCNN(lat_CNN):
             #neurons[-1].requires_grad = True
 
         return neurons
+    
+    def init_neurons(self, mbs, device):
+        neurons = lat_CNN.init_neurons(self, mbs, device)
 
-
+        self.membranepotentials = list([torch.zeros_like(neurons[idx]) for idx in self.sparse_layer_idxs])
+    
+        return neurons
 
 
 

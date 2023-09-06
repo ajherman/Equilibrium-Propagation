@@ -117,24 +117,42 @@ class Reversible_CNN(P_CNN):
             if neurons[idx].is_leaf:
                 neurons[idx].requires_grad = True
 
+        #self.u.zero_()
         # simulate dynamics for T timesteps
         #print('weight', self.synapses[0].weight.norm(1, dim=(0,2,3)))
+        grads = list([torch.zeros_like(n) for n in neurons])
         for t in range(T):
             #with torch.no_grad():
             #    neurons[1].zero_()
+            #[n.grad = None for n in neurons]
             phi = self.Phi(targetneurons, neurons, betas, fullclamping, criterion)
-            grads = torch.autograd.grad(phi, neurons, grad_outputs=self.initgradstensor, create_graph=check_thm)
+            #grads = torch.autograd.grad(phi, neurons, grad_outputs=self.initgradstensor, create_graph=check_thm)
+            (phi.sum()).backward()
+            #grads = [n.grad for n in neurons]
+            self.u += self.dt*(neurons[1].grad - self.u - neurons[1])
+            neurons[1].grad = None
             
             #neurons[0] = -2 + 4*self.activation( ((1-self.dt)*neurons[0] + self.dt*grads[0]) / 4 + 0.5 )
             #print('x', targetneurons[0].min().item(), targetneurons[0].mean().item(), targetneurons[0].max().item(), 'LGN', neurons[0].min().item(), neurons[0].mean().item(), neurons[0].max().item(), 'grads', grads[0].min().item(), grads[0].mean().item(), grads[0].max().item(), 'grads idx+1', grads[1].mean().item(), 'layer idx+1', neurons[1].mean().item())
 
     
-            neurons[0] = ((1-self.dt)*neurons[0] + self.dt*grads[0])
-            neurons[0] = torch.minimum(torch.maximum(neurons[0], torch.tensor(-5)), torch.tensor(5))
+            #neurons[0].mul_(1-self.dt)
+            #neurons[0].add_(self.dt*grads[0])
+            #neurons[0] = ((1-self.dt)*neurons[0] + self.dt*grads[0])
+            #neurons[0] = torch.minimum(torch.maximum(neurons[0], torch.tensor(-5)), torch.tensor(5))
             #neurons[0].requires_grad = True
 
-            for idx in range(1,len(neurons)-1):
-                neurons[idx] = self.activation( (1-self.dt)*neurons[idx] + self.dt*grads[idx] )
+            with torch.no_grad():
+                neurons[1] = self.activation(self.u - 0.05)#self.layerlambdas[0])
+                neurons[1].requires_grad_(True)
+           #     for idx in range(0,len(neurons)):
+           #         neurons[idx].mul_(1-self.dt)
+           #         neurons[idx].add_(self.dt*grads[idx])
+           #         if not (idx == 0):
+           #             #neurons[idx].apply_(self.activation)
+           #             neurons[idx] = self.activation(neurons[idx])
+           #             neurons[idx].requires_grad = True
+                #neurons[idx] = self.activation( (1-self.dt)*neurons[idx] + self.dt*grads[idx] )
                 #neurons[idx].requires_grad = True
 
             # apply full clamping
@@ -188,6 +206,8 @@ class Reversible_CNN(P_CNN):
 
         self.initgradstensor = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
 
+        self.u = torch.zeros_like(neurons[1])
+
         return neurons
 
     def compute_syn_grads(self, x, y, neurons_1, neurons_2, beta1beta2, criterion, check_thm=False):
@@ -221,7 +241,6 @@ class RevLatCNN(Reversible_CNN, lat_CNN, torch.nn.Module):
         Reversible_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax, inputbeta=inputbeta, dt=dt)
         self.call_super_init = False # prevents pytorch from clearing all the paramters added by the first init
         lat_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, lat_layer_idxs, lat_constraints, activation=activation, softmax=softmax)
-        print('sll', self.lat_layer_idxs, self.lat_syn)
         for i in range(len(self.lat_layer_idxs)):
             self.lat_layer_idxs[i] += 1 # input layer is now in system, shift indexes by one
         """ # will be done by super with multiple inheritance
@@ -293,7 +312,7 @@ class RevConvLatCNN(Reversible_CNN, lat_conv_CNN, torch.nn.Module):
 
 
 
-class RevLCACNN(Reversible_CNN, latCompCNN, torch.nn.Module):
+class RevLCACNN(Reversible_CNN, LCACNN, torch.nn.Module):
     def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs=[-1], comp_syn_constraints=['zerodiag+transposesymmetric'], activation=hard_sigmoid, softmax=False, layerlambdas=[1.0e-2], dt=1.0):# inputbeta=inputbeta,
         softmax = False
         # super(RevLatCNN, self)
@@ -301,9 +320,9 @@ class RevLCACNN(Reversible_CNN, latCompCNN, torch.nn.Module):
         Reversible_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax, dt=dt, inputbeta=0.0)
         self.call_super_init = False # prevents pytorch from clearing all the paramters added by the first init
         self.comp_syn_constraints = comp_syn_constraints#[comp_syn_constraints[0] + ',colunitnorm'] # normalize initial weights to unit norm, but not in subsequent updates
-        latCompCNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs, self.comp_syn_constraints, activation=activation, softmax=softmax, layerlambdas=layerlambdas, dt=dt)
+        LCACNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, inhibitstrength, competitiontype, lat_layer_idxs, lat_constraints, sparse_layer_idxs, self.comp_syn_constraints, activation=activation, softmax=softmax, layerlambdas=layerlambdas, dt=dt)
         self.comp_syn_constraints = comp_syn_constraints # no col unit norm in subsequent updates (unless specified)
-        print('sll', self.lat_layer_idxs, self.lat_syn)
+        print('sll', self.sparse_layer_idxs, self.conv_comp_layers)
         for i in range(len(self.lat_layer_idxs)):
             self.lat_layer_idxs[i] += 1 # input layer is now in system, shift indexes by one
 #        for i in range(len(self.conv_lat_layer_idxs)):
@@ -312,17 +331,18 @@ class RevLCACNN(Reversible_CNN, latCompCNN, torch.nn.Module):
 #            self.sparse_layer_idxs[i] += 1 # input layer is now in system, shift indexes by one
 
     def postupdate(self):
-        latCompCNN.postupdate(self)
+        LCACNN.postupdate(self)
         with torch.no_grad():
             #self.synapses[0].bias.fill_(-0.35)
             #self.synapses[0].weight.data /= self.synapses[0].weight.norm(2, dim=(0,2,3))[None,:,None,None]
-            for i, constraint in enumerate(self.comp_syn_constraints):
-                if 'colunitnorm' in constraint:
-                    idx = self.sparse_layer_idxs[i]
-                    if isinstance(self.synapses[idx], torch.nn.Conv2d):
-                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=(0,2,3))[None,:,None,None] / 50
-                    elif isinstance(self.synapses[idx], torch.nn.Linear):
-                        self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=0)[None,:] / 50
+            pass
+            #for i, constraint in enumerate(self.comp_syn_constraints):
+            #    if 'colunitnorm' in constraint:
+            #        idx = self.sparse_layer_idxs[i]
+            #        if isinstance(self.synapses[idx], torch.nn.Conv2d):
+            #            self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=(0,2,3))[None,:,None,None] / 50
+            #        elif isinstance(self.synapses[idx], torch.nn.Linear):
+            #            self.synapses[idx].weight /= self.synapses[idx].weight.norm(2, dim=0)[None,:] / 50
 
     def mode(self, trainclassifier=True, trainreconstruct=False, noisebeta=False):
         self.trainclassifier = trainclassifier
@@ -376,12 +396,12 @@ class RevLCACNN(Reversible_CNN, latCompCNN, torch.nn.Module):
         for j, layer in enumerate(self.conv_comp_layers):
             idx = self.sparse_layer_idxs[j] + 1
             phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=(1,2,3))
-            #phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
+            phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
 
         for j, layer in enumerate(self.fc_comp_layers):
             idx = self.sparse_layer_idxs[j+len(self.conv_comp_layers)] + 1
             phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=1)
-            #phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
+            phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
 
         return phi
 # absolute disgusting kludge. why do I have to do this in pytorch just to use JIT with cuda

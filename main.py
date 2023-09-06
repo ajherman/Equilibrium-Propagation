@@ -194,6 +194,8 @@ elif args.act=='my_hard_sig':
     activation = my_hard_sig
 elif args.act=='ctrd_hard_sig':
     activation = ctrd_hard_sig
+elif args.act=='relu':
+    activation = F.relu
 
 
 
@@ -250,7 +252,7 @@ if args.load_path=='':
                               activation=activation, competitiontype=args.competitiontype, lat_constraints=args.lat_constraints, 
                               inhibitstrength=args.inhibitstrength, softmax=False)
         elif args.model=='SparseCodingCNN':
-            model = latCompCNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
+            model = LCACNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                               lat_layer_idxs=args.lat_layers, sparse_layer_idxs=args.sparse_layers, comp_syn_constraints = args.comp_syn_constraints,
                               competitiontype=args.competitiontype, lat_constraints=args.lat_constraints,
                               inhibitstrength=args.inhibitstrength, activation=activation, softmax=args.softmax, layerlambdas=args.lambdas, dt=args.dt)
