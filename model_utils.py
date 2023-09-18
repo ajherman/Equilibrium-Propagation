@@ -505,8 +505,8 @@ class P_CNN(torch.nn.Module):
              
                 
                 if not_mse and not(self.softmax):
-                    #neurons[-1] = grads[-1]
-                    neurons[-1] = self.activation(grads[-1]) + 1e-2
+                    neurons[-1] = grads[-1]
+                    #neurons[-1] = self.activation(grads[-1]) + 1e-2
                 else:
                     neurons[-1] = self.activation( grads[-1] )
 
@@ -1233,8 +1233,9 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
         
 def hebbian_syn_grads(model, x, y, neurons, beta, criterion, coeff=1):
     model.zero_grad()
-    phi = model.Phi(x, y, neurons, beta, criterion=criterion)
-    (-coeff*phi.sum()).backward()
+    #phi = model.Phi(x, y, neurons, beta, criterion=criterion)
+    hopfield = (neurons[0] * model.synapses[0](x) ).sum() # Energy = y.W.x
+    (-coeff*hopfield.sum()).backward() # minimizing optimizer should increase hopfield energy for this configuration, so negative
 
 def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs, criterion, alg='EP', 
           random_sign=False, save=False, check_thm=False, path='', checkpoint=None, thirdphase = False, scheduler=None, cep_debug=False, tensorboard=False):
@@ -1328,14 +1329,46 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
             x, y = x.to(device), y.to(device)
             mbs = x.size(0)
 
-            reconstruct = (model.__class__.__name__ == 'LCACNN') #isreconstructmodel and int(idx%reconstructfreq) == 0 and epoch >= minreconstructepoch and epoch < maxreconstructepoch
+            reconstruct = isreconstructmodel #(model.__class__.__name__ == 'LCACNN') #isreconstructmodel and int(idx%reconstructfreq) == 0 and epoch >= minreconstructepoch and epoch < maxreconstructepoch
+            classify = not isreconstructmodel and not (alg == "LCA")
 
             neurons = model.init_neurons(mbs, device)
 
+            if alg == "LCA":
+                neurons = model(x, y, neurons, T1, beta=0.0)
+                xhat = F.conv_transpose2d(neurons[0], model.synapses[0].weight, padding=model.synapses[0].padding, stride=model.synapses[0].stride)
+                hebbian_syn_grads(model, x-xhat, y, neurons, 0.0, criterion)
+                with torch.no_grad():
+                    model.synapses[0].weight.grad.div_(neurons[0].norm(0, dim=(0,2,3))[:,None,None,None] + 1e-5) # average gradient by amount the feature was active (activity in latent layer) in the batch
+                    pass
+                    # average gradient by how much that feature was active across space (2,3) and batches (0)
+                optimizer.step()
+                
+                with torch.no_grad():
+                    # normalize columns
+                    #model.synapses[0].weight.div_(model.synapses[0].weight.norm(2, dim=(0,2,3))[None,:,None,None] + 1e-6)
+                    model.synapses[0].weight.div_(model.synapses[0].weight.norm(2, dim=(1,2,3))[:,None,None,None] + 1e-6)
+                    model.synapses[0].bias.zero_()
+
+                recon_err = ( (x - xhat).norm(2) ).data.item()
+
+                if tensorboard:
+                    batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
+                    im = lambda t: ((t+1)/2*255).to(torch.uint8)
+
+                    img_grid = torchvision.utils.make_grid(im(x[:16].data.cpu()))
+                    # matplotlib_imshow(img_grid, one_channel=True)
+                    writer.add_image('original input', img_grid, batchiter)
+
+                    img_grid = torchvision.utils.make_grid(im(xhat[:16].data.cpu()))
+                    # matplotlib_imshow(img_grid, one_channel=True)
+                    writer.add_image('completed input layer, phase 1', img_grid, batchiter)
+                
+                    writer.add_scalars('reconstruct', {'recon_err': recon_err,}, batchiter)
+
+                    writer.close()
             #if alg=='CEP' and cep_debug:
             #    x = x.double() 
-            if isreconstructmodel:
-                model.trainreconstruct = True
             if reconstruct:
                 # results in a zero and one mask used to select which indexes of the input to fully clamp.
                 # The zeros (the padding included in the randomcrop) are where it will reconstruct the output
@@ -1344,9 +1377,10 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 classifyalso = False#torch.rand((1,)).item() < 0.1 # this percent of the time, simulataneoulsy nudge the classification
                 #model.mode(trainclassifier=classifyalso, trainreconstruct=True)#, noisebeta=True)#(torch.randn((1,)).item() < 0.5))
                 
-                #origx = x.clone()
-                #if torch.randn((1,)).item() < 0.5:
-                #    x = AddGaussianNoise(0.0, 0.2)(x)
+                origx = x.clone()
+                #origx = x
+                if torch.randn((1,)).item() < 0.5:
+                    x = AddGaussianNoise(0.0, 0.2)(x)
 
                 #neurons = model(x, y, neurons, T1, beta_2)
                 #print(neurons)
@@ -1435,7 +1469,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     optimizer.step()
 
                     # anti-update with random noise
-                    #"""
+                    """
                     x_rand = torch.randn_like(x) * torch.var(x) + x.mean()
                     neurons = model.init_neurons(mbs, device)
                     neurons = model(x_rand, torch.tensor([]), neurons, T1, beta=0, criterion=criterion)
@@ -1499,7 +1533,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
             
                 if reconstruct:
                     #x = origx # remove noise, to nudge for denoising
-                    #model.fullclamping[0].fill_(True)
+                    model.fullclamping[0].fill_(True)
                     neurons = model(origx, y, neurons, T2, beta = beta_2, criterion=criterion)
                 else:
                     neurons = model(x, y, neurons, T2, beta = beta_2, criterion=criterion)
@@ -1647,7 +1681,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 if thirdphase:
                     print('\tL2 neurons_1-neurons_3 : ', [(neurons_1[idx]-neurons_3[idx]).norm(2).item() for idx in range(len(neurons_1))])
                     print('\tL2 neurons_2-neurons_3 : ', [(neurons_2[idx]-neurons_3[idx]).norm(2).item() for idx in range(len(neurons_1))])
-                if isreconstructmodel:
+                if isreconstructmodel or alg=="LCA":
                     print('\tReconstruction error (L2) :\t', recon_err)
                 if isinstance(model, VF_CNN): 
                     angle = model.angle()
@@ -1660,12 +1694,12 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     noisify = AddGaussianNoise(0.0, 0.1)
                     noisyx = noisify(origx)
                     neurons = model.init_neurons(origx.size(0), origx.device)
-                    #model.fullclamping[0].fill_(True)
+                    model.fullclamping[0].fill_(True)
                     neurons = model(noisyx, y, neurons, T1, beta_1)
                     with torch.no_grad():
                         #tneurons_1[0].zero_()
                         neurons[0] = F.conv_transpose2d(neurons[1], model.synapses[0].weight, padding=model.synapses[0].padding)
-                    #model.fullclamping[0].fill_(False)
+                    model.fullclamping[0].fill_(False)
                     neurons = model(noisyx, y, neurons, T2, beta_2)
 
                     denoise_err = (neurons[0] - origx).norm(2).item()
@@ -1673,6 +1707,19 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     if tensorboard:
                         batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
                         writer.add_scalars('denoising', {'recon vs clean err': denoise_err,}, batchiter)
+                if alg=="LCA":
+                    noisify = AddGaussianNoise(0.0, 0.1)
+                    noisyx = noisify(x)
+                    neurons = model.init_neurons(mbs, device)
+                    neurons = model(noisyx, y, neurons, T1, beta_1)
+                    xhat = F.conv_transpose2d(neurons[0], model.synapses[0].weight, padding=model.synapses[0].padding)
+
+                    denoise_err = (xhat - x).norm(2).item()
+
+                    if tensorboard:
+                        batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
+                        writer.add_scalars('denoising', {'recon vs clean err': denoise_err,}, batchiter)
+                    
 
                 if save:
                     # plot how much the neurons are changing to know when it equilibrates
@@ -1681,7 +1728,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     phis = []
                     for t in range(T1):
                         lastneurons = copy(neurons)
-                        neurons = model(x, y, neurons, 1, beta=beta_1, criterion=criterion)
+                        neurons = model(x, y, neurons, 1, preT=t, beta=beta_1, criterion=criterion)
                         [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
                         if not isreconstructmodel:
                             phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
@@ -1692,7 +1739,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                         #model.fullclamping[0].fill_(False)
                         for t in range(floatdur):
                             lastneurons = copy(neurons)
-                            neurons = model(x, y, neurons, 1, beta=0.0, criterion=criterion)
+                            neurons = model(x, y, neurons, 1, preT=t, beta=0.0, criterion=criterion)
                             [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
                             if not isreconstructmodel:
                                 phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
@@ -1748,7 +1795,9 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
             if epoch+epoch_sofar < model.sparse_lr_scheduler.T_max:
                 model.sparse_lr_scheduler.step()
 
-        test_correct = evaluate(model, test_loader, T1, device)
+        test_correct = 0
+        if classify:
+            test_correct = evaluate(model, test_loader, T1, device)
         test_acc_t = test_correct/(len(test_loader.dataset))
         run_acc = run_correct/run_total
         if tensorboard:

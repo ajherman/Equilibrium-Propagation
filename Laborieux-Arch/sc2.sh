@@ -1,21 +1,19 @@
 #!/bin/sh
 python ../main.py \
-    --model 'DenoiseLCALGNCNN' \
+    --model 'autoLCACNN' \
+    --alg 'LCA' \
     --task 'CIFAR10' \
-    --channels 256 \
+    --channels 64 \
     --kernels 8 \
     --pools 'iamm' \
     --strides 1 1 \
     --paddings 4 1 \
     --sparse-layers 0 1 \
-    --lambdas 0.00 100.0 \
+    --lambdas 0.05 100.0 \
     --fc 10 \
-    --inhibitstrength 1.0 \
-    --competitiontype 'feature_inner_products' \
-    --comp-syn-constraints 'fixedlambda,colunitnorm,zerodiag,transposesymmetric' \
     --optim 'sgd' \
     --mmt 0.9 \
-    --lrs 2.5e-3 0.0 \
+    --lrs 2.5e-1 0.0 \
     --lr-decay \
     --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
     --act 'relu' \

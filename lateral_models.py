@@ -750,6 +750,125 @@ class LCACNN(lat_CNN):
         return neurons
 
 
+class autoLCACNN(P_CNN):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=hard_sigmoid, softmax=False, dt=0.01, lambdas=[0.1]):
+        P_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax)
+        self.dt = dt
+        self.layerlambdas = lambdas
+
+    def Phi(self, x, y, neurons, beta, criterion):
+
+        mbs = x.size(0)       
+        conv_len = len(self.kernels)
+        tot_len = len(self.synapses)
+
+        layers = [x] + neurons        
+        phi = 0.0
+
+        # first layer no longer simply has hopfield pairwise product energy, but minimizes L2 of reconstruction error
+        # mathematically equivelant to adding lateral interactions = - 1/2 feature inner products, but faster to do with autograd rather than another convolution
+        phi -= (x - F.conv_transpose2d(layers[1], self.synapses[0].weight, padding=self.synapses[0].padding, stride=self.synapses[0].stride, bias=None)).norm(2, dim=(1,2,3))
+
+        # remaning layers are simple hopfield energy
+        for idx in range(1,conv_len):
+            phi += torch.sum( self.pools[idx](self.synapses[idx](layers[idx])) * layers[idx+1], dim=(1,2,3)).squeeze()     
+        for idx in range(conv_len, tot_len-1):
+            phi += torch.sum( self.synapses[idx](layers[idx].view(mbs,-1)) * layers[idx+1], dim=1).squeeze()
+             
+        #Phi computation changes depending on softmax == True or not
+        if not self.softmax:
+            idx = tot_len-1
+            phi += torch.sum( self.synapses[idx](layers[idx].view(mbs,-1)) * layers[idx+1], dim=1).squeeze()
+             
+            if beta!=0.0:
+                if criterion.__class__.__name__.find('MSE')!=-1:
+                    y = F.one_hot(y, num_classes=self.nc)
+                    L = 0.5*criterion(layers[-1].float(), y.float()).sum(dim=1).squeeze()   
+                else:
+                    L = criterion(layers[-1].float(), y).squeeze()             
+                phi -= beta*L
+        else:
+            # the output layer used for the prediction is no longer part of the system ! Summing until len(self.synapses) - 1 only
+            # the prediction is made with softmax[last weights[penultimate layer]]
+            if beta!=0.0:
+                if criterion.__class__.__name__.find('MSE')!=-1:
+                    y = F.one_hot(y, num_classes=self.nc)
+                    L = 0.5*criterion(self.synapses[-1](layers[-1].view(mbs,-1)).float(), y.float()).sum(dim=1).squeeze()   
+                else:
+                    L = criterion(self.synapses[-1](layers[-1].view(mbs,-1)).float(), y).squeeze()  
+                phi -= beta*L            
+
+        return phi
+
+    def forward(self, x, y, neurons, T, preT=0, beta=0.0, check_thm=False, criterion=torch.nn.MSELoss(reduction='none')):
+        timestepadapt = self.dt/60
+ 
+        not_mse = (criterion.__class__.__name__.find('MSE')==-1)
+        mbs = x.size(0)
+        device = x.device     
+        
+        #if check_thm:
+        #    for t in range(T):
+        #        phi = self.Phi(x, y, neurons, beta, criterion)
+        #        init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
+        #        grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=True)
+
+        #        for idx in range(len(neurons)-1):
+        #            neurons[idx] = self.activation( grads[idx] )
+        #            neurons[idx].retain_grad()
+        #     
+        #        if not_mse and not(self.softmax):
+        #            neurons[-1] = grads[-1]
+        #        else:
+        #            neurons[-1] = self.activation( grads[-1] )
+
+        #        neurons[-1].retain_grad()
+        #else:
+        dt = self.dt# + timestepadapt*preT
+        for t in range(T):
+
+           phi = self.Phi(x, y, neurons, beta, criterion)
+           #init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
+           #grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=False)
+            
+           phi.sum().backward()
+
+           # integrate representation  layer gradient into non-thresholded membrane potential, then view this with ReLu
+           #self.membpote += self.dt*(grads[0] - neurons[0] - self.membpote)
+           with torch.no_grad(): # must turn off grad so the computation graph doesn't get too smart and go backwards to past iterations using membpote
+               self.membpote += dt*(neurons[0].grad - self.membpote)#- neurons[0])#
+               neurons[0] = F.relu(self.membpote - self.layerlambdas[0])
+               neurons[0].requires_grad = True
+               for idx in range(1, len(neurons)):
+                   neurons[idx].mul_(1-dt)
+                   #neurons[idx].add_(self.dt*grads[idx])
+                   neurons[idx].add_(dt*neurons[idx].grad)
+                   neurons[idx] = self.activation( neurons[idx] )
+                   neurons[idx].requires_grad = True
+
+           if False:#dt < 5*self.dt:
+               dt += timestepadapt
+        
+           
+           #if not_mse and not(self.softmax):
+           #    neurons[-1] = grads[-1]
+           #else:
+           #    neurons[-1] = self.activation( grads[-1] )
+
+           #neurons[-1].requires_grad = True
+
+        return neurons
+
+        
+    def init_neurons(self, mbs, device):
+        neurons = P_CNN.init_neurons(self, mbs, device)
+
+        # membrane potential varible for sparse coding layer
+        self.membpote = torch.zeros_like(neurons[0])
+
+        return neurons
+
+
 
 # lateral-connectivity on logit/classification output layer to produce softmax-like behaviour CNN
 class fake_softmax_CNN(lat_CNN):

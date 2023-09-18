@@ -241,6 +241,9 @@ if args.load_path=='':
         if args.model=='CNN':
             model = P_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                               activation=activation, softmax=args.softmax)
+        if args.model=='autoLCACNN':
+            model = autoLCACNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
+                              activation=activation, softmax=args.softmax, dt=args.dt, lambdas=args.lambdas)
         elif args.model=='VFCNN':
             model = VF_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                                activation=activation, softmax=args.softmax, same_update=args.same_update)
@@ -291,12 +294,12 @@ if args.load_path=='':
                        
         if args.load_path_convert != '':
             # initialize new weights as identity
-            def my_convert_init(m): # initialize new layers as identity, so model functions like original model
-                if isinstance(m, torch.nn.Linear):
-                    m.weight.data.copy_(torch.eye(m.weight.size(0), m.weight.size(1)))
-                    if m.bias is not None:
-                        m.bias.data.zero_()
-            model.synapses.apply(my_convert_init)
+            #def my_convert_init(m): # initialize new layers as identity, so model functions like original model
+            #    if isinstance(m, torch.nn.Linear):
+            #        m.weight.data.copy_(torch.eye(m.weight.size(0), m.weight.size(1)))
+            #        if m.bias is not None:
+            #            m.bias.data.zero_()
+            #model.synapses.apply(my_convert_init)
             
             # load source model
             origmodel = torch.load(args.load_path_convert + '/model.pt', map_location=device)
@@ -442,7 +445,7 @@ if args.todo=='train':
             opt_sparse.load_state_dict(checkpoint['sparse_optim'])
         if checkpoint['scheduler'] is not None and args.lr_decay:
             scheduler.load_state_dict(checkpoint['scheduler'])
-    elif args.load_path_convert!='':
+    elif args.load_path_convert!='' and len(model.synapses) == len(origmodel.synapses):
         checkpoint = torch.load(args.load_path_convert + '/checkpoint.tar')
         optimizer.load_state_dict(checkpoint['opt'])
         if 'sparse_optim' in checkpoint.keys():

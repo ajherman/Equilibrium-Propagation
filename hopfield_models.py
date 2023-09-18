@@ -68,6 +68,40 @@ class Reversible_CNN(P_CNN):
         #     if fullclamping[idx].size(0) > 0:
         #         phi -= 0.2*neurons[idx][False == fullclamping[idx]].norm(1) # L1 penalty for lots of activation in reconstruction
         return phi
+
+
+    def dPhi(self, grads, targetneurons, neurons, betas, fullclamping, criterion):
+        
+        mbs = neurons[0].size(0)
+        conv_len = len(self.kernels)
+        tot_len = len(self.synapses)
+
+        for idx in range(conv_len):    
+            grads[idx+1] += self.pools[idx](self.synapses[idx](neurons[idx])) 
+            grads[idx] += F.conv_transpose2d(neurons[idx+1], weight=self.synapses[idx].weight, padding=self.synapses[idx].padding) # feedback (ONLY WORKS FOR IDENTITY POOLS)
+        #Phi computation changes depending on softmax == True or not
+        if not self.softmax:
+            for idx in range(conv_len, tot_len):
+                grads[idx+1] += self.synapses[idx](neurons[idx].view(mbs,-1))
+                #grads[idx] += # TODO: FEEDBACK FOR LINEAR LAYERS
+        else:
+            # the output layer used for the prediction is no longer part of the system ! Summing until len(self.synapses) - 1 only
+            for idx in range(conv_len, tot_len-1):
+                phi += torch.sum( self.synapses[idx](neurons[idx].view(mbs,-1)) * neurons[idx+1], dim=1).squeeze()
+             
+        if targetneurons[0].size(0) > 0:
+            # MSE with the input, like nudge
+            grads[idx] += betas[idx]*(-neurons[idx]+targetneurons[idx])
+            # dot-product energy, like Identity input layer
+            #phi += torch.sum(neurons[0]*targetneurons[0])
+       # for idx in range(1,len(neurons)):
+       #     if targetneurons[idx].size(0) > 0:
+       #         if criterion.__class__.__name__.find('MSE')!=-1:
+       #             L = 0.5*(betas[idx]*criterion(neurons[idx], targetneurons[idx])).view(mbs,-1).sum(dim=1).squeeze() 
+       #         else:
+       #             L = (betas[idx]*criterion(neurons[idx], targetneurons[idx])).view(mbs,-1).sum(dim=1).squeeze() 
+       #         phi -= L    
+        return grads
     
     def xytotargetneurons(self, x, y):
         # targetneurons = torch.zeros_like(neurons)
@@ -120,7 +154,8 @@ class Reversible_CNN(P_CNN):
         #self.u.zero_()
         # simulate dynamics for T timesteps
         #print('weight', self.synapses[0].weight.norm(1, dim=(0,2,3)))
-        grads = list([torch.zeros_like(n) for n in neurons])
+        #grads = list([torch.zeros_like(n) for n in neurons]) # pre-allocate memmory
+        #with torch.no_grad():
         for t in range(T):
             #with torch.no_grad():
             #    neurons[1].zero_()
@@ -129,8 +164,14 @@ class Reversible_CNN(P_CNN):
             #grads = torch.autograd.grad(phi, neurons, grad_outputs=self.initgradstensor, create_graph=check_thm)
             (phi.sum()).backward()
             #grads = [n.grad for n in neurons]
-            self.u += self.dt*(neurons[1].grad - self.u - neurons[1])
-            neurons[1].grad = None
+            #self.u += self.dt*(neurons[1].grad - self.u)# - neurons[1])
+            self.u.mul(1-self.dt)
+            self.u.add_(self.dt*(neurons[1].grad))
+            #neurons[1].grad = None
+
+            #grads = self.dPhi(grads, targetneurons, neurons, betas, fullclamping, criterion)
+            #self.u.mul_(1-self.dt)
+            #self.u.add_(self.dt*grads[1])
             
             #neurons[0] = -2 + 4*self.activation( ((1-self.dt)*neurons[0] + self.dt*grads[0]) / 4 + 0.5 )
             #print('x', targetneurons[0].min().item(), targetneurons[0].mean().item(), targetneurons[0].max().item(), 'LGN', neurons[0].min().item(), neurons[0].mean().item(), neurons[0].max().item(), 'grads', grads[0].min().item(), grads[0].mean().item(), grads[0].max().item(), 'grads idx+1', grads[1].mean().item(), 'layer idx+1', neurons[1].mean().item())
@@ -143,7 +184,7 @@ class Reversible_CNN(P_CNN):
             #neurons[0].requires_grad = True
 
             with torch.no_grad():
-                neurons[1] = self.activation(self.u - 0.05)#self.layerlambdas[0])
+                neurons[1] = self.activation(self.u - 0.2)#self.layerlambdas[0])
                 neurons[1].requires_grad_(True)
            #     for idx in range(0,len(neurons)):
            #         neurons[idx].mul_(1-self.dt)
@@ -396,14 +437,34 @@ class RevLCACNN(Reversible_CNN, LCACNN, torch.nn.Module):
         for j, layer in enumerate(self.conv_comp_layers):
             idx = self.sparse_layer_idxs[j] + 1
             phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=(1,2,3))
-            phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
+            #phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
 
         for j, layer in enumerate(self.fc_comp_layers):
             idx = self.sparse_layer_idxs[j+len(self.conv_comp_layers)] + 1
             phi += torch.sum(layer(neurons[idx]) * neurons[idx], dim=1)
-            phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
+            #phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
 
         return phi
+
+    def dPhi(self, grads, targetneurons, neurons, betas, fullclamping, criterion):
+        grads = Reversible_CNN.dPhi(self, grads, targetneurons, neurons, betas, fullclamping, criterion)
+        
+        #for j, idx in enumerate(self.lat_layer_idxs):
+        #    grads[idx+1] += self.lat_syn[j](neurons[idx].view(mbs,-1)))
+
+        for j, layer in enumerate(self.conv_comp_layers):
+            idx = self.sparse_layer_idxs[j] + 1
+            grads[idx] += layer(neurons[idx])
+            #phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
+
+        for j, layer in enumerate(self.fc_comp_layers):
+            idx = self.sparse_layer_idxs[j+len(self.conv_comp_layers)] + 1
+            grads[idx] += layer(neurons[idx])
+            #phi += neurons[idx].norm(2) * 0.5 # remove L2 decay term for sparse representations
+
+
+        return grads
+
 # absolute disgusting kludge. why do I have to do this in pytorch just to use JIT with cuda
 # add ModuleInterface
 @torch.jit.interface
