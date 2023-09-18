@@ -1241,7 +1241,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
           random_sign=False, save=False, check_thm=False, path='', checkpoint=None, thirdphase = False, scheduler=None, cep_debug=False, tensorboard=False):
     
     if tensorboard:
-        tb_write_freq = 10 # every 10th of an epoch update tensorboard
+        tb_write_freq = 100 # every 10th of an epoch update tensorboard
         writer = SummaryWriter('runs/{}/{}/{}'.format(alg, model.__class__.__name__, path))
 
     mbs = train_loader.batch_size
@@ -1728,7 +1728,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     phis = []
                     for t in range(T1):
                         lastneurons = copy(neurons)
-                        neurons = model(x, y, neurons, 1, preT=t, beta=beta_1, criterion=criterion)
+                        neurons = model(x, y, neurons, 1, beta=beta_1, criterion=criterion)
                         [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
                         if not isreconstructmodel:
                             phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
@@ -1739,7 +1739,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                         #model.fullclamping[0].fill_(False)
                         for t in range(floatdur):
                             lastneurons = copy(neurons)
-                            neurons = model(x, y, neurons, 1, preT=t, beta=0.0, criterion=criterion)
+                            neurons = model(x, y, neurons, 1, beta=0.0, criterion=criterion)
                             [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
                             if not isreconstructmodel:
                                 phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())

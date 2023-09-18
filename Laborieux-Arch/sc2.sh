@@ -9,11 +9,11 @@ python ../main.py \
     --strides 1 1 \
     --paddings 4 1 \
     --sparse-layers 0 1 \
-    --lambdas 0.05 100.0 \
+    --lambdas 0.15 100.0 \
     --fc 10 \
     --optim 'sgd' \
     --mmt 0.9 \
-    --lrs 2.5e-1 0.0 \
+    --lrs 2.5e-7 0.0 \
     --lr-decay \
     --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
     --act 'relu' \
@@ -30,3 +30,6 @@ python ../main.py \
     --epochs 120 \
     --tensorboard \
     --dt 0.01 \
+    #--competitiontype "feature_inner_products" \
+    #--inhibitstrength 1.0 \
+    #--comp-syn-constraints "rowunitnorm" \

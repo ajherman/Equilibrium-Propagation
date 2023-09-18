@@ -2,27 +2,28 @@
 python ../main.py \
     --model 'autoLCACNN' \
     --alg 'EP' \
+    --thirdphase \
     --task 'CIFAR10' \
     --channels 64 128 \
     --kernels 8 5 \
+    --lrs 2.5e-1 1.0e-1 5.0e-2 \
+    --lr-decay \
+    --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
     --pools 'immm' \
-    --strides 1 2 2 \
+    --strides 1 2 1 \
     --paddings 4 2 1 \
     --sparse-layers 0 \
-    --lambdas 0.3 \
+    --lambdas 0.05 \
     --fc 10 \
     --optim 'sgd' \
     --mmt 0.9 \
-    --lrs 2.5e-6 1.0e-2 5.0e-3 \
-    --lr-decay \
-    --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
     --act 'my_hard_sig' \
     --todo 'train' \
     --betas 0.0 0.5 \
-    --T1 800 \
+    --T1 400 \
     --T2 $3 \
     --mbs 128 \
-    --loss 'mse' \
+    --loss 'cel' \
     --data-aug \
     --save  \
     --device $2 \
