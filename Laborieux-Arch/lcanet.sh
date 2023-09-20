@@ -10,10 +10,10 @@ python ../main.py \
     --lr-decay \
     --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
     --pools 'immm' \
-    --strides 1 2 1 \
-    --paddings 4 2 1 \
+    --strides 1 1 1 1 \
+    --paddings 4 2 1 0 \
     --sparse-layers 0 \
-    --lambdas 0.05 \
+    --lambdas 0.1 \
     --fc 10 \
     --optim 'sgd' \
     --mmt 0.9 \
@@ -21,7 +21,7 @@ python ../main.py \
     --todo 'train' \
     --betas 0.0 0.5 \
     --T1 400 \
-    --T2 $3 \
+    --T2 200 \
     --mbs 128 \
     --loss 'cel' \
     --data-aug \
@@ -31,5 +31,5 @@ python ../main.py \
     --epochs 120 \
     --tensorboard \
     --dt 0.01 \
-    --load-path-convert results/LCA/mse/2023-09-17/21-21-43_gpu1 \
+    --load-path-convert results/LCA/mse/2023-09-20/11-48-27_gpu0 \
     --convert-place-layers 0 - - - \

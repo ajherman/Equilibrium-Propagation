@@ -720,7 +720,7 @@ class LCACNN(lat_CNN):
 
             for j, idx in enumerate(self.sparse_layer_idxs):
                 self.membranepotentials[j].mul_(1-self.dt) # L2 decay on membrane potential
-                self.membranepotentials[j].add_(self.dt*(neurons[idx].grad)) # integrate neuron input
+                self.membranepotentials[j].add_(self.dt*(neurons[idx].grad - neurons[idx])) # integrate neuron input, and L2 penalty on repre.
                 neurons[idx] = F.relu(self.membranepotentials[j] - self.layerlambdas[j])
 
             for idx in range(len(neurons)): # -1):
@@ -767,14 +767,12 @@ class autoLCACNN(P_CNN):
 
         # first layer no longer simply has hopfield pairwise product energy, but minimizes L2 of reconstruction error
         # mathematically equivelant to adding lateral interactions = - 1/2 feature inner products, but faster to do with autograd rather than another convolution
-        #phi -= (-F.conv_transpose2d(layers[1], self.synapses[0].weight, padding=self.synapses[0].padding, stride=self.synapses[0].stride, bias=None)).pow(2).sum(dim=(1,2,3))*0.5
-        phi -= (F.conv_transpose2d(layers[1], self.synapses[0].weight, padding=self.synapses[0].padding, stride=self.synapses[0].stride, bias=None)).norm(2, dim=(1,2,3))
+        phi -= (x-F.conv_transpose2d(layers[1], self.synapses[0].weight, padding=self.synapses[0].padding, stride=self.synapses[0].stride, bias=None)).pow(2).sum(dim=(1,2,3))*0.5
+        #phi -= (x-F.conv_transpose2d(layers[1], self.synapses[0].weight, padding=self.synapses[0].padding, stride=self.synapses[0].stride, bias=None)).norm(2, dim=(1,2,3))
         ######## REMOVE SQRT FOR FIXED LCA ########
-###### !!!!!!!!!
-        ########## 
 
         # remaning layers are simple hopfield energy
-        for idx in range(0,conv_len):
+        for idx in range(1,conv_len):
             phi += torch.sum( self.pools[idx](self.synapses[idx](layers[idx])) * layers[idx+1], dim=(1,2,3)).squeeze()     
         for idx in range(conv_len, tot_len-1):
             phi += torch.sum( self.synapses[idx](layers[idx].view(mbs,-1)) * layers[idx+1], dim=1).squeeze()
@@ -805,8 +803,6 @@ class autoLCACNN(P_CNN):
         return phi
 
     def forward(self, x, y, neurons, T, beta=0.0, check_thm=False, criterion=torch.nn.MSELoss(reduction='none')):
-        timestepadapt = self.dt/60
- 
         not_mse = (criterion.__class__.__name__.find('MSE')==-1)
         mbs = x.size(0)
         device = x.device     
@@ -831,36 +827,44 @@ class autoLCACNN(P_CNN):
         auxdt = 0.5 # non-lca model dynamics need a larger timestep to accomplish anything
         for t in range(T):
 
-           phi = self.Phi(x, y, neurons, beta, criterion)
-           #init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
-           #grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=False)
+            phi = self.Phi(x, y, neurons, beta, criterion)
+            #init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
+            #grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=False)
+             
+            phi.sum().backward()
+
+            #self.dt = mbs*1/((neurons[0].grad-neurons[0]).norm(2)+5*mbs) # timestep adapts to make each step the same size, with maximum of 0.1
+            with torch.no_grad(): # must turn off grad so the computation graph doesn't get too smart and go backwards to past iterations using membpote
+                # integrate representation  layer gradient into non-thresholded membrane potential, then view this with ReLu
+                self.membpote += self.dt*(neurons[0].grad - self.membpote)#- neurons[0])#
+                neurons[0] = F.relu(self.membpote - self.layerlambdas[0])
+                neurons[0].requires_grad = True
+
+                # remaining layers do classic hopfield dynamics
+                for idx in range(1, len(neurons)):
+                    neurons[idx].mul_(1-auxdt)
+                    #neurons[idx].add_(self.dt*grads[idx])
+                    neurons[idx].add_(auxdt*neurons[idx].grad)
+                    neurons[idx] = self.activation( neurons[idx] )
+                    neurons[idx].requires_grad = True
+
+            maxdt = 4*self.origdt
+            if False:#self.dt < maxdt:
+                self.dt += (self.origdt)/200#timestepadapt
+                if self.dt > maxdt:
+                    self.dt = maxdt
+        #    elif self.stateT > 350:
+        #        if self.dt > self.origdt/100:
+        #            #self.dt -= self.origdt/10
+        #            self.dt *= 0.9
+         
             
-           phi.sum().backward()
+            #if not_mse and not(self.softmax):
+            #    neurons[-1] = grads[-1]
+            #else:
+            #    neurons[-1] = self.activation( grads[-1] )
 
-           with torch.no_grad(): # must turn off grad so the computation graph doesn't get too smart and go backwards to past iterations using membpote
-               # integrate representation  layer gradient into non-thresholded membrane potential, then view this with ReLu
-               self.membpote += self.dt*(neurons[0].grad - self.membpote)#- neurons[0])#
-               neurons[0] = F.relu(self.membpote - self.layerlambdas[0])
-               neurons[0].requires_grad = True
-
-               # remaining layers do classic hopfield dynamics
-               for idx in range(1, len(neurons)):
-                   neurons[idx].mul_(1-auxdt)
-                   #neurons[idx].add_(self.dt*grads[idx])
-                   neurons[idx].add_(auxdt*neurons[idx].grad)
-                   neurons[idx] = self.activation( neurons[idx] )
-                   neurons[idx].requires_grad = True
-
-           if self.dt < 5*self.origdt:
-               self.dt += timestepadapt
-        
-           
-           #if not_mse and not(self.softmax):
-           #    neurons[-1] = grads[-1]
-           #else:
-           #    neurons[-1] = self.activation( grads[-1] )
-
-           #neurons[-1].requires_grad = True
+            #neurons[-1].requires_grad = True
 
         return neurons
 
@@ -872,6 +876,8 @@ class autoLCACNN(P_CNN):
         self.membpote = torch.zeros_like(neurons[0])
 
         self.dt = self.origdt # adaptive timestep starts small and changes over evolution
+
+        self.stateT = 0
 
         return neurons
 

@@ -8,19 +8,19 @@ python ../main.py \
     --pools 'iamm' \
     --strides 1 1 \
     --paddings 4 1 \
-    --sparse-layers 0 1 \
-    --lambdas 0.15 100.0 \
+    --sparse-layers 0 \
+    --lambdas $3 \
     --fc 10 \
     --optim 'sgd' \
     --mmt 0.9 \
-    --lrs 2.5e-7 0.0 \
+    --lrs 2.5e-1 0.0 \
     --lr-decay \
-    --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
+    --wds 3e-4 3e-4 3e-4 3e-4 3e-4 3e-4 \
     --act 'relu' \
     --todo 'train' \
     --betas 0.0 0.5 \
     --T1 800 \
-    --T2 $3 \
+    --T2 0 \
     --mbs 128 \
     --loss 'mse' \
     --data-aug \

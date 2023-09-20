@@ -434,6 +434,7 @@ if args.todo=='train':
     if args.lr_decay:
         #scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[40,80,120], gamma=0.1)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, 100, eta_min=1e-5)
+        
     else:
         scheduler = None
 

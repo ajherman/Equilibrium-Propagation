@@ -1232,10 +1232,14 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
 
         
 def hebbian_syn_grads(model, x, y, neurons, beta, criterion, coeff=1):
+    for s in model.synapses:
+        s.requires_grad_(True)
     model.zero_grad()
     #phi = model.Phi(x, y, neurons, beta, criterion=criterion)
     hopfield = (neurons[0] * model.synapses[0](x) ).sum() # Energy = y.W.x
     (-coeff*hopfield.sum()).backward() # minimizing optimizer should increase hopfield energy for this configuration, so negative
+    for s in model.synapses:
+        s.requires_grad_(False)
 
 def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs, criterion, alg='EP', 
           random_sign=False, save=False, check_thm=False, path='', checkpoint=None, thirdphase = False, scheduler=None, cep_debug=False, tensorboard=False):
@@ -1337,10 +1341,10 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
             if alg == "LCA":
                 neurons = model(x, y, neurons, T1, beta=0.0)
                 xhat = F.conv_transpose2d(neurons[0], model.synapses[0].weight, padding=model.synapses[0].padding, stride=model.synapses[0].stride)
-                hebbian_syn_grads(model, x-xhat, y, neurons, 0.0, criterion)
+                hebbian_syn_grads(model, x-xhat, y, neurons, 0.0, criterion, coeff=1)
                 with torch.no_grad():
                     model.synapses[0].weight.grad.div_(neurons[0].norm(0, dim=(0,2,3))[:,None,None,None] + 1e-5) # average gradient by amount the feature was active (activity in latent layer) in the batch
-                    pass
+                    #print(neurons[0].norm(0, dim=(0,2,3))) # average gradient by amount the feature was active (activity in latent layer) in the batch
                     # average gradient by how much that feature was active across space (2,3) and batches (0)
                 optimizer.step()
                 
@@ -1349,8 +1353,14 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     #model.synapses[0].weight.div_(model.synapses[0].weight.norm(2, dim=(0,2,3))[None,:,None,None] + 1e-6)
                     model.synapses[0].weight.div_(model.synapses[0].weight.norm(2, dim=(1,2,3))[:,None,None,None] + 1e-6)
                     model.synapses[0].bias.zero_()
+                    model.synapses[1].weight.zero_() # fc layer required based on how code is written, but don't want it to interfere
+                    model.synapses[1].bias.zero_() # fc layer required based on how code is written, but don't want it to interfere
+                #for g in optimizer.param_groups:
+                #    print(g['lr'], end=', ')
+                #print()
+                #print('grad', model.synapses[0].weight.grad.norm(2).item())
 
-                recon_err = ( (x - xhat).norm(2) ).data.item()
+                recon_err = ( (x - xhat).norm(2, dim=(1,2,3)).mean() ).data.item()
 
                 if tensorboard:
                     batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
@@ -1702,7 +1712,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     model.fullclamping[0].fill_(False)
                     neurons = model(noisyx, y, neurons, T2, beta_2)
 
-                    denoise_err = (neurons[0] - origx).norm(2).item()
+                    denoise_err = (neurons[0] - origx).norm(2, dim=(1,2,3)).mean().item()
 
                     if tensorboard:
                         batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
