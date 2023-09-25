@@ -243,7 +243,7 @@ if args.load_path=='':
                               activation=activation, softmax=args.softmax)
         if args.model=='autoLCACNN':
             model = autoLCACNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
-                              activation=activation, softmax=args.softmax, dt=args.dt, lambdas=args.lambdas)
+                              activation=activation, softmax=args.softmax, dt=args.dt, sparse_layer_idxs=args.sparse_layers, lambdas=args.lambdas)
         elif args.model=='VFCNN':
             model = VF_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                                activation=activation, softmax=args.softmax, same_update=args.same_update)
@@ -291,56 +291,56 @@ if args.load_path=='':
             model = P_CNN_Stochastic(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                               activation=activation, softmax=args.softmax, dynamicsmomentum=0.5)
 
-                       
-        if args.load_path_convert != '':
-            # initialize new weights as identity
-            #def my_convert_init(m): # initialize new layers as identity, so model functions like original model
-            #    if isinstance(m, torch.nn.Linear):
-            #        m.weight.data.copy_(torch.eye(m.weight.size(0), m.weight.size(1)))
-            #        if m.bias is not None:
-            #            m.bias.data.zero_()
-            #model.synapses.apply(my_convert_init)
-            
-            # load source model
-            origmodel = torch.load(args.load_path_convert + '/model.pt', map_location=device)
-            # copy parameters
-            if len(args.convert_place_layers) == 0:
-                args.convert_place_layers = range(len(origmodel.synapses))
-            for i, idx in enumerate(args.convert_place_layers):
-                if idx != '-':
-                    idx = int(idx)
-                    model.synapses[idx] = origmodel.synapses[i]
-            #if origmodel.hasattr('lat_syn'):
-            #    if len(args.convert_place_lat_layers) == 0:
-            #        args.convert_place_lat_layers = range(len(origmodel.synapses))
-            #    model.lat_syn[args.convert_place_lat_layers] = origmodel.lat_syn
-
-            # modify lateral or tranposed layers if necessary based on sourced weights
-            if hasattr(model, 'postupdate'):
-                model.postupdate()
-        else:
-            if not(args.train_lateral) or args.lat_init_zeros:
-                if hasattr(model, 'lat_syn'):
-                    print("zeroing lateral layers")
-                    for l in model.lat_syn:
-                        l.weight.data = l.weight.data.zero_()
-                        if hasattr(l, 'bias') and l.bias is not None:
-                            l.bias.data = l.bias.data.zero_()
-                if hasattr(model, 'conv_lat_syn'):
-                    print("zeroing conv lateral layers")
-                    for l in model.conv_lat_syn:
-                        l.weight.data = l.weight.data.zero_()
-                        if hasattr(l, 'bias') and l.bias is not None:
-                            l.bias.data = l.bias.data.zero_()
-                elif args.model == 'Lat_MH_CNN':
-                    print("zeroing head lateral layers")
-                    model.head_hopfield.apply(torch.nn.init.zeros_)
+                   
+        if not(args.train_lateral) or args.lat_init_zeros:
+            if hasattr(model, 'lat_syn'):
+                print("zeroing lateral layers")
+                for l in model.lat_syn:
+                    l.weight.data = l.weight.data.zero_()
+                    if hasattr(l, 'bias') and l.bias is not None:
+                        l.bias.data = l.bias.data.zero_()
+            if hasattr(model, 'conv_lat_syn'):
+                print("zeroing conv lateral layers")
+                for l in model.conv_lat_syn:
+                    l.weight.data = l.weight.data.zero_()
+                    if hasattr(l, 'bias') and l.bias is not None:
+                        l.bias.data = l.bias.data.zero_()
+            elif args.model == 'Lat_MH_CNN':
+                print("zeroing head lateral layers")
+                model.head_hopfield.apply(torch.nn.init.zeros_)
 
         print('\n')
         print('Poolings =', model.pools)
 
     if args.scale is not None:
         model.apply(my_init(args.scale))
+
+    if args.load_path_convert != '':
+        # initialize new weights as identity
+        #def my_convert_init(m): # initialize new layers as identity, so model functions like original model
+        #    if isinstance(m, torch.nn.Linear):
+        #        m.weight.data.copy_(torch.eye(m.weight.size(0), m.weight.size(1)))
+        #        if m.bias is not None:
+        #            m.bias.data.zero_()
+        #model.synapses.apply(my_convert_init)
+        
+        # load source model
+        origmodel = torch.load(args.load_path_convert + '/model.pt', map_location=device)
+        # copy parameters
+        if len(args.convert_place_layers) == 0:
+            args.convert_place_layers = range(len(origmodel.synapses))
+        for i, idx in enumerate(args.convert_place_layers):
+            if idx != '-':
+                idx = int(idx)
+                model.synapses[idx] = origmodel.synapses[i]
+        #if origmodel.hasattr('lat_syn'):
+        #    if len(args.convert_place_lat_layers) == 0:
+        #        args.convert_place_lat_layers = range(len(origmodel.synapses))
+        #    model.lat_syn[args.convert_place_lat_layers] = origmodel.lat_syn
+
+        # modify lateral or tranposed layers if necessary based on sourced weights
+        if hasattr(model, 'postupdate'):
+            model.postupdate()
 else:
     model = torch.load(args.load_path + '/model.pt', map_location=device)
 
@@ -446,13 +446,13 @@ if args.todo=='train':
             opt_sparse.load_state_dict(checkpoint['sparse_optim'])
         if checkpoint['scheduler'] is not None and args.lr_decay:
             scheduler.load_state_dict(checkpoint['scheduler'])
-    elif args.load_path_convert!='' and len(model.synapses) == len(origmodel.synapses):
-        checkpoint = torch.load(args.load_path_convert + '/checkpoint.tar')
-        optimizer.load_state_dict(checkpoint['opt'])
-        if 'sparse_optim' in checkpoint.keys():
-            opt_sparse.load_state_dict(checkpoint['sparse_optim'])
-        if checkpoint['scheduler'] is not None and args.lr_decay:
-            scheduler.load_state_dict(checkpoint['scheduler'])
+    #elif args.load_path_convert!='' and len(model.synapses) == len(origmodel.synapses):
+    #    checkpoint = torch.load(args.load_path_convert + '/checkpoint.tar')
+    #    optimizer.load_state_dict(checkpoint['opt'])
+    #    if 'sparse_optim' in checkpoint.keys():
+    #        opt_sparse.load_state_dict(checkpoint['sparse_optim'])
+    #    if checkpoint['scheduler'] is not None and args.lr_decay:
+    #        scheduler.load_state_dict(checkpoint['scheduler'])
     else: 
         checkpoint = None
     

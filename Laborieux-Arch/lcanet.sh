@@ -4,26 +4,28 @@ python ../main.py \
     --alg 'EP' \
     --thirdphase \
     --task 'CIFAR10' \
-    --channels 64 128 \
-    --kernels 8 5 \
-    --lrs 2.5e-1 1.0e-1 5.0e-2 \
+    --scale 0.5 \
+    --channels 64 256 512 512 \
+    --kernels 8 3 3 3 \
+    --lrs 2.5e-3 1.0e-2 5.0e-2 3e-2 1e-2 \
     --lr-decay \
-    --wds 3e-4 3e-4 3e-4 3e-4 3e-4 \
-    --pools 'immm' \
-    --strides 1 1 1 1 \
-    --paddings 4 2 1 0 \
+    --wds 3e-4 3e-4 3e-4 3e-4 3e-4 3e-4 \
+    --pools 'Mmmmm' \
+    --strides 1 1 1 1 1 \
+    --paddings 4 1 1 1 0 \
     --sparse-layers 0 \
-    --lambdas 0.1 \
+    --lambdas 0.1 0.01 0.0 \
     --fc 10 \
     --optim 'sgd' \
     --mmt 0.9 \
     --act 'my_hard_sig' \
     --todo 'train' \
     --betas 0.0 0.5 \
-    --T1 400 \
-    --T2 200 \
+    --T1 600 \
+    --T2 50 \
     --mbs 128 \
     --loss 'cel' \
+    --softmax \
     --data-aug \
     --save  \
     --device $2 \

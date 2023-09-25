@@ -73,6 +73,8 @@ def make_pools(letters):
             pools.append( torch.nn.AvgPool2d(2, stride=2) )
         elif letters[p]=='i':
             pools.append( torch.nn.Identity() )
+        elif letters[p]=='M':
+            pools.append( torch.nn.MaxPool2d(4, stride=4) )
     return pools
         
 
@@ -83,19 +85,31 @@ def my_init(scale):
         if isinstance(m, torch.nn.Conv2d):
             torch.nn.init.kaiming_uniform_(m.weight, math.sqrt(5))
             m.weight.data.mul_(scale)
+            # add identity to prevent arbitrary geodesics from scrambling seperability, losing information
+            n = min(m.weight.size(0), m.weight.size(1))
+            centerx = math.floor(m.kernel_size[0]/2)
+            centery = math.floor(m.kernel_size[1]/2)
+            with torch.no_grad():
+                m.weight[:n,:n,centerx,centery].add_(torch.eye(n, device=m.weight.device))
+            ##### """
             if m.bias is not None:
                 fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(m.weight)
                 bound = 1 / math.sqrt(fan_in)
                 torch.nn.init.uniform_(m.bias, -bound, bound)
-                m.bias.data.mul_(scale)
+                #m.bias.data.mul_(scale)
         if isinstance(m, torch.nn.Linear):
             torch.nn.init.kaiming_uniform_(m.weight, math.sqrt(5))
             m.weight.data.mul_(scale)
+            # """
+            n = min(m.weight.size(0), m.weight.size(1))
+            with torch.no_grad():
+                m.weight[:n,:n].add_(torch.eye(n, device=m.weight.device))
+            ##### """
             if m.bias is not None:
                 fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(m.weight)
                 bound = 1 / math.sqrt(fan_in)
                 torch.nn.init.uniform_(m.bias, -bound, bound)
-                m.bias.data.mul_(scale)
+                #m.bias.data.mul_(scale)
     return my_scaled_init
 
 
@@ -1241,17 +1255,101 @@ def hebbian_syn_grads(model, x, y, neurons, beta, criterion, coeff=1):
     for s in model.synapses:
         s.requires_grad_(False)
 
+def compute_lca_syn_grads(model, x, neurons, beta, criterion):
+    #for s in model.synapses:
+    model.zero_grad()
+
+    layers = [x] + neurons
+    pools = [torch.nn.Identity()] + model.pools
+
+    hopfield = 0
+
+    for idx in model.sparse_layer_idxs:
+        if idx-1 in model.sparse_layer_idxs:
+            target = pools[idx](model.membpotes[idx-1])
+        else:
+            target = layers[idx]
+        if isinstance(model.synapses[idx], torch.nn.Conv2d):
+            xhat = F.conv_transpose2d(layers[idx+1], model.synapses[idx].weight, padding=model.synapses[idx].padding, stride=model.synapses[idx].stride).detach()
+            model.synapses[idx].requires_grad_(True) # we're using autograd just as a clever way of getting the pre*post neural activity product, attaching the gradient autoamtically to the corresponding synapse
+            # when doing this, its essential grad is only used on the following step, and not calculating the reconstruction, or it will include another unrelated term
+            # this could also be done with xhat.detach()
+            hopfield += (layers[idx+1] * model.synapses[idx](target-xhat) ).sum()
+            #model.synapses[idx].requires_grad_(False)
+        elif isinstance(model.synapses[idx], torch.nn.Linear):
+            xhat = torch.matmul(layers[idx+1], model.synapses[idx].weight).detach()
+            model.synapses[idx].requires_grad_(True)
+            hopfield += (layers[idx+1] * model.synapses[idx](target.view(x.size(0),-1)-xhat) ).sum()
+            #model.synapses[idx].requires_grad_(False)
+        # gradient wrt. weights (couretsy of autograd) is the same as the "outer product" (and analogue for conv. nets.) L = s_i w_ij s_j  =>  dL/dw_ij = s_i * s_j
+    (-hopfield.sum()).backward() # minimizing optimizer should increase hopfield energy for this configuration, so negative
+
+    #for s in model.synapses:
+    with torch.no_grad():
+        # average gradient by how much that feature was active across space (2,3) and batches (0)
+        for j in model.sparse_layer_idxs:
+            if isinstance(model.synapses[j], torch.nn.Conv2d):
+                model.synapses[j].weight.grad.div_(neurons[j].norm(0, dim=(0,2,3))[:,None,None,None] + 1e-5) # average gradient by amount the feature was active (activity in latent layer) in the batch
+            elif isinstance(model.synapses[j], torch.nn.Linear):
+                model.synapses[j].weight.grad.div_(neurons[j].norm(0, dim=0)[:,None] +1e-5)
+
+def compute_lcaep_syn_grads(model, x, y, neurons_1, neurons_2, mp_1, mp_2, betas, criterion):
+    mbs = x.size(0)
+    #for s in model.synapses:
+    model.zero_grad()
+
+    xhat_1 = F.conv_transpose2d(neurons_1[0], model.synapses[0].weight, padding=model.synapses[0].padding, stride=model.synapses[0].stride).detach()
+    xhat_2 = F.conv_transpose2d(neurons_2[0], model.synapses[0].weight, padding=model.synapses[0].padding, stride=model.synapses[0].stride).detach()
+    # use the reconstruction in the anti-nudged state (1) so this resembles a LCA rule learning to reconstruct
+    pot_1 = [x] + mp_1 #[xhat] + 
+    pot_2 = [x] + mp_2
+    act_1 = [x] + neurons_1
+    act_2 = [x] + neurons_2
+    #act_2 = act_1
+    #act_2 = act_1 # use only the free state activation. Makes this analogous to STDP where dW = act(s_post) * d(s_pre)/dt
+    pools = [torch.nn.Identity()] + model.pools
+
+    dphi = 0
+
+    for idx in model.sparse_layer_idxs:
+        #if idx-1 in model.sparse_layer_idxs:
+        #    p = pools[idx]
+        #else:
+        #    p = torch.nn.Identity()
+        if isinstance(model.synapses[idx], torch.nn.Conv2d):
+            model.synapses[idx].requires_grad_(True)
+            dphi += ( act_2[idx+1] * model.synapses[idx](pools[idx](pot_2[idx])) ).sum()
+            dphi -= ( act_1[idx+1] * model.synapses[idx](pools[idx](pot_1[idx])) ).sum()
+            #model.synapses[idx].requires_grad_(False)
+        elif isinstance(model.synapses[idx], torch.nn.Linear):
+            model.synapses[idx].requires_grad_(True)
+            dphi += ( act_2[idx+1] * model.synapses[idx](pools[idx](pot_2[idx]).view(mbs,-1)) ).sum()
+            dphi -= ( act_1[idx+1] * model.synapses[idx](pools[idx](pot_1[idx]).view(mbs,-1)) ).sum()
+            #model.synapses[idx].requires_grad_(False)
+    # hybrid of EP, but similar to deep LCA taking the "outer product" of error and activation in the above layer 
+    (dphi.sum()/(betas[0]-betas[1])).backward() # minimizing optimizer should strengthen attractor two and weaken attractor one
+
+    #for s in model.synapses:
+    #with torch.no_grad():
+    #    # average gradient by how much that feature was active across space (2,3) and batches (0)
+    #    for j in model.sparse_layer_idxs:
+    #        if isinstance(model.synapses[j], torch.nn.Conv2d):
+    #            model.synapses[j].weight.grad.div_(neurons_1[j].norm(0, dim=(0,2,3))[:,None,None,None] + 1e-5) # average gradient by amount the feature was active (activity in latent layer) in the batch
+    #        elif isinstance(model.synapses[j], torch.nn.Linear):
+    #            model.synapses[j].weight.grad.div_(neurons_1[j].norm(0, dim=0)[:,None] +1e-5)
+
 def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs, criterion, alg='EP', 
           random_sign=False, save=False, check_thm=False, path='', checkpoint=None, thirdphase = False, scheduler=None, cep_debug=False, tensorboard=False):
     
-    if tensorboard:
-        tb_write_freq = 100 # every 10th of an epoch update tensorboard
-        writer = SummaryWriter('runs/{}/{}/{}'.format(alg, model.__class__.__name__, path))
 
     mbs = train_loader.batch_size
     start = time.time()
     iter_per_epochs = math.ceil(len(train_loader.dataset)/mbs)
     beta_1, beta_2 = betas[:2]
+    
+    if tensorboard:
+        tb_write_freq = iter_per_epochs/3 # every 3 iters update tensorboard
+        writer = SummaryWriter('runs/{}/{}/{}'.format(alg, model.__class__.__name__, path))
 
     if checkpoint is None:
         train_acc = [10.0]
@@ -1338,45 +1436,6 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
 
             neurons = model.init_neurons(mbs, device)
 
-            if alg == "LCA":
-                neurons = model(x, y, neurons, T1, beta=0.0)
-                xhat = F.conv_transpose2d(neurons[0], model.synapses[0].weight, padding=model.synapses[0].padding, stride=model.synapses[0].stride)
-                hebbian_syn_grads(model, x-xhat, y, neurons, 0.0, criterion, coeff=1)
-                with torch.no_grad():
-                    model.synapses[0].weight.grad.div_(neurons[0].norm(0, dim=(0,2,3))[:,None,None,None] + 1e-5) # average gradient by amount the feature was active (activity in latent layer) in the batch
-                    #print(neurons[0].norm(0, dim=(0,2,3))) # average gradient by amount the feature was active (activity in latent layer) in the batch
-                    # average gradient by how much that feature was active across space (2,3) and batches (0)
-                optimizer.step()
-                
-                with torch.no_grad():
-                    # normalize columns
-                    #model.synapses[0].weight.div_(model.synapses[0].weight.norm(2, dim=(0,2,3))[None,:,None,None] + 1e-6)
-                    model.synapses[0].weight.div_(model.synapses[0].weight.norm(2, dim=(1,2,3))[:,None,None,None] + 1e-6)
-                    model.synapses[0].bias.zero_()
-                    model.synapses[1].weight.zero_() # fc layer required based on how code is written, but don't want it to interfere
-                    model.synapses[1].bias.zero_() # fc layer required based on how code is written, but don't want it to interfere
-                #for g in optimizer.param_groups:
-                #    print(g['lr'], end=', ')
-                #print()
-                #print('grad', model.synapses[0].weight.grad.norm(2).item())
-
-                recon_err = ( (x - xhat).norm(2, dim=(1,2,3)).mean() ).data.item()
-
-                if tensorboard:
-                    batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
-                    im = lambda t: ((t+1)/2*255).to(torch.uint8)
-
-                    img_grid = torchvision.utils.make_grid(im(x[:16].data.cpu()))
-                    # matplotlib_imshow(img_grid, one_channel=True)
-                    writer.add_image('original input', img_grid, batchiter)
-
-                    img_grid = torchvision.utils.make_grid(im(xhat[:16].data.cpu()))
-                    # matplotlib_imshow(img_grid, one_channel=True)
-                    writer.add_image('completed input layer, phase 1', img_grid, batchiter)
-                
-                    writer.add_scalars('reconstruct', {'recon_err': recon_err,}, batchiter)
-
-                    writer.close()
             #if alg=='CEP' and cep_debug:
             #    x = x.double() 
             if reconstruct:
@@ -1470,37 +1529,48 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
             #        model.lambda_val = model.lambdas[0]
         
 
-            if alg=='EP' or alg=='CEP' or alg=="HebUnsupervised":
+            if alg=='EP' or alg=='CEP':
                 # First phase
                 neurons = model(x, y, neurons, T1, beta=beta_1, criterion=criterion)
                 neurons_1 = copy(neurons)
-                if alg == 'HebUnsupervised':
-                    hebbian_syn_grads(model, x, neurons, criterion)
-                    optimizer.step()
+            elif alg=="LCAEP":
+                # First phase
+                neurons = model(x, y, neurons, T1, beta=beta_1, criterion=criterion)
+                neurons_1 = copy(neurons)
+                mp_1 = copy(model.membpotes)
+            if alg == "LCA":
+                neurons = model(x, y, neurons, T1, beta=0.0)
+                compute_lca_syn_grads(model, x, neurons, 0.0, criterion)
 
-                    # anti-update with random noise
-                    """
-                    x_rand = torch.randn_like(x) * torch.var(x) + x.mean()
-                    neurons = model.init_neurons(mbs, device)
-                    neurons = model(x_rand, torch.tensor([]), neurons, T1, beta=0, criterion=criterion)
-                    hebbian_syn_grads(model, x_rand, neurons, criterion, coeff=-0.01)
-                    optimizer.step()
+                        
+                optimizer.step()
+                if hasattr(model, 'postupdate'):
+                    model.postupdate()                
 
-                    # project the weights so each feature has norm 1
-                    with torch.no_grad():
-                        for idx in range(len(model.synapses)):
-                            if isinstance(model.synapses[idx], torch.nn.Conv2d):
-                                model.synapses[idx].weight.div_(model.synapses[idx].weight.data.norm(2, dim=(1,2,3))[:,None,None,None])
-                            elif isinstance(model.synapses[idx], torch.nn.Linear):
-                                model.synapses[idx].weight.data /= model.synapses[idx].weight.data.norm(2, dim=1)[:,None]
-                            #model.synapses[idx].bias.fill_(0.0)#-0.1)
-    
-                    print('synapse L2 norms', [l.weight.norm(2).item() for l in model.synapses])
-                    print('bias L1 norms', [l.bias.norm(1).item() for l in model.synapses])
-                    print('final forward fc bias', model.synapses[-1].bias)
-                    print('neuron L1', [n.norm(1) for n in neurons_1])
-                    print('neuron size', [n.size() for n in neurons_1])
-                    #"""
+                for j, g in enumerate(optimizer.param_groups):
+                    if g['lr'] == 0.0: # decoupling other layers we don't want to interfere in the LCA training phase
+                        self.synapses[j].weight.zero_() # fc layer required based on how code is written, but don't want it to interfere
+                        self.synapses[j].bias.zero_() # fc layer required based on how code is written, but don't want it to interfere
+            if alg =="LCA" or alg=="LCAEP":
+                xhat = F.conv_transpose2d(neurons[0], model.synapses[0].weight, padding=model.synapses[0].padding, stride=model.synapses[0].stride)
+
+                recon_err = ( (x - xhat).norm(2, dim=(1,2,3)).mean() ).data.item()
+
+                if tensorboard:
+                    batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
+                    im = lambda t: ((t+1)/2*255).to(torch.uint8)
+
+                    img_grid = torchvision.utils.make_grid(im(x[:16].data.cpu()))
+                    # matplotlib_imshow(img_grid, one_channel=True)
+                    writer.add_image('original input', img_grid, batchiter)
+
+                    img_grid = torchvision.utils.make_grid(im(xhat[:16].data.cpu()))
+                    # matplotlib_imshow(img_grid, one_channel=True)
+                    writer.add_image('completed input layer, phase 1', img_grid, batchiter)
+                
+                    writer.add_scalars('reconstruct', {'recon_err': recon_err,}, batchiter)
+
+                    writer.close()
             elif alg=='BPTT':
                 neurons = model(x, y, neurons, T1-T2, beta=0.0, criterion=criterion)           
                 # detach data and neurons from the graph
@@ -1568,24 +1638,38 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                             model.compute_syn_grads(x, y, neurons_1, neurons_2, (beta_2, beta_3), criterion, neurons_3=neurons_3)
                 else:
                     model.compute_syn_grads(x, y, neurons_1, neurons_2, betas[:2], criterion)
-                #if reconstruct: # hebbian update on clean input
-                #    model.zero_grad()
-                #    neurons = copy(neurons_1)
-                #    neurons = model(origx, y, neurons, 0, beta = beta_1, criterion=criterion)
-                #    neurons[0] = x
-                #    phi = model.Phi(model.targetneurons, neurons, model.betas, model.fullclamping, criterion=criterion)
-                #    (-1*phi.sum()).backward()
-                #    optimizer.step()
 
-                
                 if reconstruct:
                     #print('grads mean', [l.weight.grad.mean().item() for l in model.synapses], 'grads max', [l.weight.grad.max().item() for l in model.synapses], 'grads min', [l.weight.grad.min().item() for l in model.synapses])
                     model.synapses[0].weight.grad.div_(neurons[1].norm(1, dim=(0,2,3))[:,None,None,None]/2 +1.0) # average gradient by amount the feature was active in the batch
-                    #print('grads mean', [l.weight.grad.mean().item() for l in model.synapses], 'grads max', [l.weight.grad.max().item() for l in model.synapses], 'grads min', [l.weight.grad.min().item() for l in model.synapses])
+                #print('grads mean', [l.weight.grad.mean().item() for l in model.synapses], 'grads max', [l.weight.grad.max().item() for l in model.synapses], 'grads min', [l.weight.grad.min().item() for l in model.synapses])
                 optimizer.step()      
                 if hasattr(model, 'postupdate'):
                     model.postupdate()
 
+            if alg=="LCAEP":
+                neurons = model(x, y, neurons, T2, beta = beta_2, criterion=criterion)
+                neurons_2 = copy(neurons)
+                mp_2 = copy(model.membpotes)
+                
+                if thirdphase:
+                    if len(betas) > 2:
+                        beta_3 = betas[2]
+                    else:
+                        beta_3 = -beta_2
+                    neurons = copy(neurons_1)
+                    model.membpotes = copy(mp_1)
+                    neurons = model(x, y, neurons, T2, beta = beta_3, criterion=criterion)
+                    neurons_3 = copy(neurons)
+                    mp_3 = copy(model.membpotes)
+                    #model.compute_syn_grads(x, y, mp_2, mp_3, (beta_2, beta_3), criterion)
+                    compute_lcaep_syn_grads(model, x, y, neurons_2, neurons_3, mp_2, mp_3, (beta_2, beta_3), criterion)
+                else:
+                    compute_lcaep_syn_grads(model, x, y, neurons_1, neurons_2, mp_1, mp_2, betas[:2], criterion)
+                optimizer.step()      
+                if hasattr(model, 'postupdate'):
+                    model.postupdate()
+                
             elif alg=='CEP':
                 if random_sign and (beta_1==0.0):
                     rnd_sgn = 2*np.random.randint(2) - 1
@@ -1686,12 +1770,12 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 print('Epoch :', round(epoch_sofar+epoch+(idx/iter_per_epochs), 2),
                       '\tRun train acc :', round(run_acc,3),'\t('+str(run_correct)+'/'+str(run_total)+')\t',
                       timeSince(start, ((idx+1)+epoch*iter_per_epochs)/(epochs*iter_per_epochs)))
-                if alg == 'EP' or alg == 'CEP':
+                if alg == 'EP' or alg == 'CEP' or alg=="LCAEP":
                     print('\tL2 neurons_1-neurons_2 : ', [(neurons_1[idx]-neurons_2[idx]).norm(2).item() for idx in range(len(neurons_1))])
                 if thirdphase:
                     print('\tL2 neurons_1-neurons_3 : ', [(neurons_1[idx]-neurons_3[idx]).norm(2).item() for idx in range(len(neurons_1))])
                     print('\tL2 neurons_2-neurons_3 : ', [(neurons_2[idx]-neurons_3[idx]).norm(2).item() for idx in range(len(neurons_1))])
-                if isreconstructmodel or alg=="LCA":
+                if isreconstructmodel or alg=="LCA" or alg=="LCAEP":
                     print('\tReconstruction error (L2) :\t', recon_err)
                 if isinstance(model, VF_CNN): 
                     angle = model.angle()
@@ -1717,14 +1801,14 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     if tensorboard:
                         batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
                         writer.add_scalars('denoising', {'recon vs clean err': denoise_err,}, batchiter)
-                if alg=="LCA":
+                if alg=="LCA" or alg=="LCAEP":
                     noisify = AddGaussianNoise(0.0, 0.1)
                     noisyx = noisify(x)
                     neurons = model.init_neurons(mbs, device)
                     neurons = model(noisyx, y, neurons, T1, beta_1)
                     xhat = F.conv_transpose2d(neurons[0], model.synapses[0].weight, padding=model.synapses[0].padding)
 
-                    denoise_err = (xhat - x).norm(2).item()
+                    denoise_err = (xhat - x).norm(2, dim=(1,2,3)).mean().item()
 
                     if tensorboard:
                         batchiter = (epoch_sofar+epoch)*iter_per_epochs+idx
@@ -1774,7 +1858,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                         plt.xlabel('time step')
                         plt.yscale('log')
                         plt.axvline(x=T1, linestyle=':')
-                    fig.savefig(path + '/neural_equilibrating_{}.png'.format(epoch_sofar+epoch))
+                        plt.tight_layout()
+                    fig.savefig(path + '/neural_equilibrating_{}.png'.format(epoch_sofar+epoch), bbox_inches='tight')
                     plt.close()
 
                     if not isreconstructmodel:
@@ -1785,7 +1870,7 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                         plt.ylabel('energy')
                         plt.axvline(x=T1, linestyle=':')
                         plt.tight_layout()
-                        fig.savefig(path + '/phi_evolution_{}.png'.format(epoch_sofar+epoch))
+                        fig.savefig(path + '/phi_evolution_{}.png'.format(epoch_sofar+epoch), bbox_inches='tight')
                         plt.close()
 
             

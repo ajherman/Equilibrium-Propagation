@@ -751,10 +751,11 @@ class LCACNN(lat_CNN):
 
 
 class autoLCACNN(P_CNN):
-    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=hard_sigmoid, softmax=False, dt=0.01, lambdas=[0.1]):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=hard_sigmoid, softmax=False, dt=0.01, sparse_layer_idxs=[0], lambdas=[0.1]):
         P_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax)
         self.origdt = dt
         self.layerlambdas = lambdas
+        self.sparse_layer_idxs = sparse_layer_idxs
 
     def Phi(self, x, y, neurons, beta, criterion):
 
@@ -765,23 +766,48 @@ class autoLCACNN(P_CNN):
         layers = [x] + neurons        
         phi = 0.0
 
-        # first layer no longer simply has hopfield pairwise product energy, but minimizes L2 of reconstruction error
-        # mathematically equivelant to adding lateral interactions = - 1/2 feature inner products, but faster to do with autograd rather than another convolution
-        phi -= (x-F.conv_transpose2d(layers[1], self.synapses[0].weight, padding=self.synapses[0].padding, stride=self.synapses[0].stride, bias=None)).pow(2).sum(dim=(1,2,3))*0.5
-        #phi -= (x-F.conv_transpose2d(layers[1], self.synapses[0].weight, padding=self.synapses[0].padding, stride=self.synapses[0].stride, bias=None)).norm(2, dim=(1,2,3))
-        ######## REMOVE SQRT FOR FIXED LCA ########
+        for idx in self.sparse_layer_idxs:
+            # layer no longer simply has hopfield pairwise product energy, but minimizes L2 of reconstruction error
+            # mathematically equivelant to adding lateral interactions = - 1/2 feature inner products, but faster to do with autograd rather than another convolution
+            # layers[idx]- could be replaced by a seperate dot product term like other layers for input drive. Faster to do competition and drive together in one term though.
+            if idx-1 in self.sparse_layer_idxs: # for stacked LCA, membrane potential is fed to next layer to reconstruct, not actual activations
+                target = self.membpotes[idx-1]
+                target.grad = None
+            else:
+                target = layers[idx]
+            if isinstance(self.synapses[idx], torch.nn.Conv2d):
+                if idx < 1:
+                    p = torch.nn.Identity()
+                else:
+                    p = self.pools[idx-1]
+                phi -= (p(target)-F.conv_transpose2d(layers[idx+1], self.synapses[idx].weight, padding=self.synapses[idx].padding, stride=self.synapses[idx].stride, bias=None)).pow(2).sum(dim=(1,2,3))*0.5
+            elif isinstance(self.synapses[idx], torch.nn.Linear):
+                if isinstance(self.synapses[idx-1], torch.nn.Conv2d):
+                    p = self.pools[idx-1]
+                else:
+                    p = torch.nn.Identity()
+                phi -= (p(target).view(mbs,-1)-torch.matmul(layers[idx+1], self.synapses[idx].weight)).pow(2).sum(dim=1)*0.5
 
         # remaning layers are simple hopfield energy
-        for idx in range(1,conv_len):
-            phi += torch.sum( self.pools[idx](self.synapses[idx](layers[idx])) * layers[idx+1], dim=(1,2,3)).squeeze()     
-        for idx in range(conv_len, tot_len-1):
-            phi += torch.sum( self.synapses[idx](layers[idx].view(mbs,-1)) * layers[idx+1], dim=1).squeeze()
-             
+        for idx in range(conv_len):
+            if idx not in self.sparse_layer_idxs:
+                if idx-1 in self.sparse_layer_idxs:
+                    # prevent feedback to sparse layer from hopfield layers with .detach() to hide gradient
+                    # pool representation, since we don't apply the pool to its input already so all values are part of state not only max 
+                    #.detach()
+                    phi += torch.sum( self.pools[idx](self.synapses[idx](self.pools[idx-1](layers[idx].detach()))).detach() * layers[idx+1], dim=(1,2,3)).squeeze()     
+                else:
+                    phi += torch.sum( self.pools[idx](self.synapses[idx](layers[idx])) * layers[idx+1], dim=(1,2,3)).squeeze()     
+
         #Phi computation changes depending on softmax == True or not
         if not self.softmax:
-            idx = tot_len-1
-            phi += torch.sum( self.synapses[idx](layers[idx].view(mbs,-1)) * layers[idx+1], dim=1).squeeze()
-             
+            for idx in range(conv_len, tot_len):
+                if idx not in self.sparse_layer_idxs:
+                    if idx-1 in self.sparse_layer_idxs:
+                        phi += torch.sum( self.synapses[idx](self.pools[idx-1](layers[idx]).view(mbs,-1)) * layers[idx+1], dim=1).squeeze()
+                    else:
+                        phi += torch.sum( self.synapses[idx]((layers[idx]).view(mbs,-1)) * layers[idx+1], dim=1).squeeze()
+                     
             if beta!=0.0:
                 if criterion.__class__.__name__.find('MSE')!=-1:
                     y = F.one_hot(y, num_classes=self.nc)
@@ -790,22 +816,35 @@ class autoLCACNN(P_CNN):
                     L = criterion(layers[-1].float(), y).squeeze()             
                 phi -= beta*L
         else:
+            for idx in range(conv_len, tot_len-1):
+                if idx not in self.sparse_layer_idxs:
+                    if idx-1 in self.sparse_layer_idxs:
+                        phi += torch.sum( self.synapses[idx](self.pools[idx-1](layers[idx]).view(mbs,-1)) * layers[idx+1], dim=1).squeeze()
+                    else:
+                        phi += torch.sum( self.synapses[idx]((layers[idx]).view(mbs,-1)) * layers[idx+1], dim=1).squeeze()
             # the output layer used for the prediction is no longer part of the system ! Summing until len(self.synapses) - 1 only
             # the prediction is made with softmax[last weights[penultimate layer]]
             if beta!=0.0:
+                if idx-1 in self.sparse_layer_idxs:
+                    out = self.synapses[-1](self.pools[-2](layers[-1]).view(mbs,-1))
+                else:
+                    out = self.synapses[-1](layers[-1].view(mbs,-1))
                 if criterion.__class__.__name__.find('MSE')!=-1:
                     y = F.one_hot(y, num_classes=self.nc)
-                    L = 0.5*criterion(self.synapses[-1](layers[-1].view(mbs,-1)).float(), y.float()).sum(dim=1).squeeze()   
+                    L = 0.5*criterion(out.float(), y.float()).sum(dim=1).squeeze()   
                 else:
-                    L = criterion(self.synapses[-1](layers[-1].view(mbs,-1)).float(), y).squeeze()  
+                    L = criterion(out.float(), y).squeeze()  
                 phi -= beta*L            
 
         return phi
+
 
     def forward(self, x, y, neurons, T, beta=0.0, check_thm=False, criterion=torch.nn.MSELoss(reduction='none')):
         not_mse = (criterion.__class__.__name__.find('MSE')==-1)
         mbs = x.size(0)
         device = x.device     
+        for s in self.synapses:
+            s.requires_grad_(False) # for ep, we dont' even need gradients on the weights during evaluation, since we calculate this with the theorem.
         
         #if check_thm:
         #    for t in range(T):
@@ -824,7 +863,7 @@ class autoLCACNN(P_CNN):
 
         #        neurons[-1].retain_grad()
         #else:
-        auxdt = 0.5 # non-lca model dynamics need a larger timestep to accomplish anything
+        auxdt = 1.0 # non-lca model dynamics need more time to accomplish anything
         for t in range(T):
 
             phi = self.Phi(x, y, neurons, beta, criterion)
@@ -834,29 +873,30 @@ class autoLCACNN(P_CNN):
             phi.sum().backward()
 
             #self.dt = mbs*1/((neurons[0].grad-neurons[0]).norm(2)+5*mbs) # timestep adapts to make each step the same size, with maximum of 0.1
-            with torch.no_grad(): # must turn off grad so the computation graph doesn't get too smart and go backwards to past iterations using membpote
+            with torch.no_grad(): # must turn off grad so the computation graph doesn't get too smart and go backwards to past iterations using membpotes
                 # integrate representation  layer gradient into non-thresholded membrane potential, then view this with ReLu
-                self.membpote += self.dt*(neurons[0].grad - self.membpote)#- neurons[0])#
-                neurons[0] = F.relu(self.membpote - self.layerlambdas[0])
-                neurons[0].requires_grad = True
+                for idx in range(len(neurons)):
+                    if idx in self.sparse_layer_idxs:
+                        if idx < len(neurons)-1: # don't apply L2 decay on membrane potential if there isn't a layer above
+                            self.membpotes[idx].mul_(1-self.dt)
+                        self.membpotes[idx].add_(self.dt*(neurons[idx].grad))#- neurons[0])#
+                        if self.membpotes[idx].grad is not None:
+                            self.membpotes[idx].add_(self.dt*self.membpotes[idx].grad)
+                        neurons[idx] = F.relu(self.membpotes[idx] - self.layerlambdas[idx])
+                        neurons[idx].requires_grad = True
+                    else:
+                        # remaining layers do classic hopfield dynamics
+                        neurons[idx].mul_(1-auxdt)
+                        #neurons[idx].add_(self.dt*grads[idx])
+                        neurons[idx].add_(auxdt*neurons[idx].grad)
+                        neurons[idx] = self.activation( neurons[idx] )
+                        neurons[idx].requires_grad = True
 
-                # remaining layers do classic hopfield dynamics
-                for idx in range(1, len(neurons)):
-                    neurons[idx].mul_(1-auxdt)
-                    #neurons[idx].add_(self.dt*grads[idx])
-                    neurons[idx].add_(auxdt*neurons[idx].grad)
-                    neurons[idx] = self.activation( neurons[idx] )
-                    neurons[idx].requires_grad = True
-
-            maxdt = 4*self.origdt
-            if False:#self.dt < maxdt:
-                self.dt += (self.origdt)/200#timestepadapt
-                if self.dt > maxdt:
-                    self.dt = maxdt
-        #    elif self.stateT > 350:
-        #        if self.dt > self.origdt/100:
-        #            #self.dt -= self.origdt/10
-        #            self.dt *= 0.9
+            #maxdt = 2*self.origdt
+            #if self.dt < maxdt:
+            #    self.dt += (self.origdt)/200#timestepadapt
+            #    if self.dt > maxdt:
+            #        self.dt = maxdt
          
             
             #if not_mse and not(self.softmax):
@@ -870,10 +910,35 @@ class autoLCACNN(P_CNN):
 
         
     def init_neurons(self, mbs, device):
-        neurons = P_CNN.init_neurons(self, mbs, device)
+        #neurons = P_CNN.init_neurons(self, mbs, device)
+        neurons = []
+        append = neurons.append
+        size = self.in_size
+        for idx in range(len(self.channels)-1): 
+            size = int( (size + 2*self.paddings[idx] - self.kernels[idx])/self.strides[idx] + 1 )   # size after conv
+            if idx in self.sparse_layer_idxs:
+                append(torch.zeros((mbs, self.channels[idx+1], size, size), requires_grad=True, device=device))
+                if self.pools[idx].__class__.__name__.find('Pool')!=-1:
+                    size = int( (size - self.pools[idx].kernel_size)/self.pools[idx].stride + 1 )  # size after Pool
+            else:
+                if self.pools[idx].__class__.__name__.find('Pool')!=-1:
+                    size = int( (size - self.pools[idx].kernel_size)/self.pools[idx].stride + 1 )  # size after Pool
+                append(torch.zeros((mbs, self.channels[idx+1], size, size), requires_grad=True, device=device))
+
+
+        size = size * size * self.channels[-1]
+        
+        if not self.softmax:
+            for idx in range(len(self.fc)):
+                append(torch.zeros((mbs, self.fc[idx]), requires_grad=True, device=device))
+        else:
+            # we *REMOVE* the output layer from the system
+            for idx in range(len(self.fc) - 1):
+                append(torch.zeros((mbs, self.fc[idx]), requires_grad=True, device=device))            
+            
 
         # membrane potential varible for sparse coding layer
-        self.membpote = torch.zeros_like(neurons[0])
+        self.membpotes = copy(neurons)#[torch.zeros_like(neurons[idx]) for idx in self.sparse_layer_idxs]
 
         self.dt = self.origdt # adaptive timestep starts small and changes over evolution
 
@@ -881,6 +946,99 @@ class autoLCACNN(P_CNN):
 
         return neurons
 
+    def Hopfield(self, x, y, neurons, beta, criterion):
+        # the plain hopfield energy, for use by differeniating to get STDP-like pre-post activity products
+        mbs = x.size(0)       
+        conv_len = len(self.kernels)
+        tot_len = len(self.synapses)
+
+        layers = [x] + neurons        
+        phi = 0.0
+
+        for idx in range(0,conv_len):
+            # pool comes after for sparse layers, not before
+            # pool representation, since we don't apply the pool to its input already so all vlaues are part of state not only max 
+            if idx-1 in self.sparse_layer_idxs:
+                p1 = self.pools[idx-1]
+            else:
+                p1 = torch.nn.Identity()
+            if idx in self.sparse_layer_idxs:
+                p0 = torch.nn.Identity()
+            else:
+                p0 = self.pools[idx]
+            phi += torch.sum( p0(self.synapses[idx](p1(layers[idx]))) * layers[idx+1], dim=(1,2,3)).squeeze()     
+        for idx in range(conv_len, tot_len-1):
+            if idx-1 in self.sparse_layer_idxs:
+                p1 = self.pools[idx-1]
+            else:
+                p1 = torch.nn.Identity()
+            phi += torch.sum( self.synapses[idx](p1(layers[idx]).view(mbs,-1)) * layers[idx+1], dim=1).squeeze()
+             
+        #Phi computation changes depending on softmax == True or not
+        if not self.softmax:
+            idx = tot_len-1
+            if idx-1 in self.sparse_layer_idxs:
+                p1 = self.pools[idx-1]
+            else:
+                p1 = torch.nn.Identity()
+            phi += torch.sum( self.synapses[idx](p1(layers[idx]).view(mbs,-1)) * layers[idx+1], dim=1).squeeze()
+             
+            if beta!=0.0:
+                if criterion.__class__.__name__.find('MSE')!=-1:
+                    y = F.one_hot(y, num_classes=self.nc)
+                    L = 0.5*criterion(layers[-1].float(), y.float()).sum(dim=1).squeeze()   
+                else:
+                    L = criterion(layers[-1].float(), y).squeeze()             
+                phi -= beta*L
+        else:
+            # the output layer used for the prediction is no longer part of the system ! Summing until len(self.synapses) - 1 only
+            # the prediction is made with softmax[last weights[penultimate layer]]
+            if beta!=0.0:
+                if idx-1 in self.sparse_layer_idxs:
+                    out = self.synapses[-1](self.pools[-2](layers[-1]).view(mbs,-1))
+                else:
+                    out = self.synapses[-1](layers[-1].view(mbs,-1))
+                if criterion.__class__.__name__.find('MSE')!=-1:
+                    y = F.one_hot(y, num_classes=self.nc)
+                    L = 0.5*criterion(out.float(), y.float()).sum(dim=1).squeeze()   
+                else:
+                    L = criterion(out.float(), y).squeeze()  
+                phi -= beta*L            
+
+        return phi
+
+    def compute_syn_grads(self, x, y, neurons_1, neurons_2, betas, criterion, check_thm=False):
+        for idx in range(len(self.synapses)):
+            self.synapses[idx].weight.requires_grad_(True)
+        
+        beta_1, beta_2 = betas
+        
+        self.zero_grad()            # p.grad is zero
+        if not(check_thm):
+            phi_1 = self.Hopfield(x, y, neurons_1, beta_1, criterion)
+        else:
+            phi_1 = self.Hopfield(x, y, neurons_1, beta_2, criterion)
+        phi_1 = phi_1.mean()
+        
+        phi_2 = self.Hopfield(x, y, neurons_2, beta_2, criterion)
+        phi_2 = phi_2.mean()
+        
+        delta_phi = (phi_2 - phi_1)/(beta_1 - beta_2)        
+        delta_phi.backward() # p.grad = -(d_Phi_2/dp - d_Phi_1/dp)/(beta_2 - beta_1) ----> dL/dp  by the theorem
+
+#        for idx in range(len(self.synapses)):
+#            self.synapses[idx].weight.requires_grad_(False)
+
+    def postupdate(self):
+        with torch.no_grad():
+            for j in self.sparse_layer_idxs:
+                # normalize columns
+                if isinstance(self.synapses[j], torch.nn.Conv2d):
+                    #self.synapses[j].weight.div_(self.synapses[j].weight.norm(2, dim=(0,2,3))[None,:,None,None] + 1e-6)
+                    self.synapses[j].weight.div_(self.synapses[j].weight.norm(2, dim=(1,2,3))[:,None,None,None] + 1e-6)
+                elif isinstance(self.synapses[j], torch.nn.Linear):
+                    self.synapses[j].weight.div_(self.synapses[j].weight.norm(2, dim=1)[:,None] + 1e-6)
+                self.synapses[j].bias.zero_()
 
 
 # lateral-connectivity on logit/classification output layer to produce softmax-like behaviour CNN
