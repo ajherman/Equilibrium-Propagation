@@ -96,6 +96,14 @@ parser.add_argument('--noise', type=float, default = 0.0,  help='standard deviat
 
 parser.add_argument('--dt', type=float, default = 1.0,  help='timestep for model dynamics. Decay time constant = 1.0')
 
+parser.add_argument('--anneal-competition', default = False, action = 'store_true', help='whether to enable the lateral/hopfield interactions gradually (turning up coefficient by 0.1 per epoch for the first 10 epochs (default: False)')
+
+parser.add_argument('--pgdnorm',type = int, default = 2, help='L norm to use for PGD attack (if --todo attack), default = 2, values > 1e5 are set to L-infinity')
+
+parser.add_argument('--keep-checkpoints', type=int, default=0, help='interval to save seperate checkpoint files for (e.g. setting to 5 means every 5 epochs a new checkpoint file is created)')
+
+parser.add_argument('--deltapertubation', default=False, action='store_true', help='measure L2 pertubation before/after comparing hidden states before/after adversarial attack')
+
 args = parser.parse_args()
 command_line = ' '.join(sys.argv)
 
@@ -116,7 +124,10 @@ if args.save:
     if args.load_path=='':
         path = 'results/'+args.alg+'/'+args.loss+'/'+date+'/'+time+'_gpu'+str(args.device)
     else:
-        path = args.load_path
+        if os.path.isdir(args.load_path):
+            path = args.load_path
+        else:
+            path = args.load_path.replace('.', '-')
     if not(os.path.exists(path)):
         os.makedirs(path)
     print('---------- saving at {} --------------'.format(path))
@@ -212,6 +223,10 @@ elif args.loss=='loggrad':
 print('loss =', criterion, '\n')
 
 
+if args.anneal_competition:
+    inhibitstrength = 0
+else:
+    inhibitstrength = args.inhibitstrength
 
 if args.load_path=='':
 
@@ -243,7 +258,7 @@ if args.load_path=='':
                               activation=activation, softmax=args.softmax)
         if args.model=='autoLCACNN':
             model = autoLCACNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
-                              activation=activation, softmax=args.softmax, dt=args.dt, sparse_layer_idxs=args.sparse_layers, lambdas=args.lambdas)
+                              activation=activation, softmax=args.softmax, dt=args.dt, sparse_layer_idxs=args.sparse_layers, lambdas=args.lambdas, inhibitstrength=inhibitstrength)
         elif args.model=='VFCNN':
             model = VF_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                                activation=activation, softmax=args.softmax, same_update=args.same_update)
@@ -253,12 +268,12 @@ if args.load_path=='':
         elif args.model=='LatSoftCNN':
             model = fake_softmax_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                               activation=activation, competitiontype=args.competitiontype, lat_constraints=args.lat_constraints, 
-                              inhibitstrength=args.inhibitstrength, softmax=False)
+                              inhibitstrength=inhibitstrength, softmax=False)
         elif args.model=='SparseCodingCNN':
             model = LCACNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                               lat_layer_idxs=args.lat_layers, sparse_layer_idxs=args.sparse_layers, comp_syn_constraints = args.comp_syn_constraints,
                               competitiontype=args.competitiontype, lat_constraints=args.lat_constraints,
-                              inhibitstrength=args.inhibitstrength, activation=activation, softmax=args.softmax, layerlambdas=args.lambdas, dt=args.dt)
+                              inhibitstrength=inhibitstrength, activation=activation, softmax=args.softmax, layerlambdas=args.lambdas, dt=args.dt)
         elif args.model=='ReversibleCNN':
             model = Reversible_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                               activation=activation, softmax=args.softmax)
@@ -270,7 +285,7 @@ if args.load_path=='':
             model = RevLCACNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                               lat_layer_idxs=args.lat_layers, sparse_layer_idxs=args.sparse_layers, comp_syn_constraints = args.comp_syn_constraints,
                               competitiontype=args.competitiontype, lat_constraints=args.lat_constraints,
-                              inhibitstrength=args.inhibitstrength, activation=activation, softmax=args.softmax, layerlambdas=args.lambdas, dt=args.dt)
+                              inhibitstrength=inhibitstrength, activation=activation, softmax=args.softmax, layerlambdas=args.lambdas, dt=args.dt)
         elif args.model=="LateralCNN":
             model = lat_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                             args.lat_layers, lat_constraints=args.lat_constraints,
@@ -342,7 +357,10 @@ if args.load_path=='':
         if hasattr(model, 'postupdate'):
             model.postupdate()
 else:
-    model = torch.load(args.load_path + '/model.pt', map_location=device)
+    if os.path.isdir(args.load_path):
+        model = torch.load(args.load_path + '/model.pt', map_location=device)
+    else:
+        model = torch.load(args.load_path, map_location=device)
 
 model.to(device)
 print(model)
@@ -495,18 +513,27 @@ if args.todo=='train':
 
     train(model, optimizer, train_loader, test_loader, args.T1, args.T2, betas, device, args.epochs, criterion, alg=args.alg, 
                  random_sign=args.random_sign, check_thm=args.check_thm, save=args.save, path=path, checkpoint=checkpoint, 
-                 thirdphase=args.thirdphase, scheduler=scheduler, cep_debug=args.cep_debug, tensorboard=args.tensorboard)
+                 thirdphase=args.thirdphase, scheduler=scheduler, cep_debug=args.cep_debug, tensorboard=args.tensorboard, annealcompetition=True, keep_checkpoints=args.keep_checkpoints)
 
 
 elif args.todo=='attack':
     print('Performing PGD attacks on model')
-    savepath = path+'/PGD_attack/'
+    pgdnorm = args.pgdnorm
+    if pgdnorm > 1e5:
+        pgdnorm = np.inf
+    savepath = path+'/PGD_attack/L_{}/'.format(pgdnorm)
     os.makedirs(savepath, exist_ok=True)
     accs = []
     accs_adv = []
+    delta_rights = []
+    delta_wrongs = []
     for eps in args.eps:
         print('Now attacking with epsilon : ', eps)
-        acc, acc_adv, examples, preds, preds_adv = attack(model, test_loader, args.nbatches, args.T1, args.T2, eps, criterion, device, savepath, save_adv_examples=args.save, figs=args.figs)     
+        print('deltapert', args.deltapertubation)
+        acc, acc_adv, examples, preds, preds_adv, delta_right, delta_wrong = attack(model, test_loader, args.nbatches, args.T1, args.T2, eps, criterion, device, savepath, norm=pgdnorm, save_adv_examples=args.save, figs=args.figs, deltapert = args.deltapertubation)
+        delta_rights.append(delta_right)
+        delta_wrongs.append(delta_wrong)
+        print(delta_right, delta_wrong)
         accs.append(acc)
         accs_adv.append(acc_adv)
     if args.save:
@@ -520,6 +547,25 @@ elif args.todo=='attack':
         plt.ylabel('accuracy')
         plt.legend()
         fig.savefig(savepath + '/robustness.pdf', bbox_inches='tight')
+
+        fig2, axs = plt.subplots(2, len(model.synapses))
+        dr = np.asarray(delta_rights).transpose()
+        dw = np.asarray(delta_wrongs).transpose()
+        np.save(savepath + 'deltapert-right.npy', dw)
+        np.save(savepath + 'deltapert-wrong.npy', dw)
+        axs[0,0].set_ylabel('correct prediction')
+        axs[1,0].set_ylabel('tricked by attack')
+        for li in range(len(model.synapses)):
+            axs[0,li].plot(args.eps, dr[li,:])
+            axs[1,li].plot(args.eps, dw[li,:])
+            axs[1,li].set_title('layer ' + str(li))
+            axs[0,li].set_xlabel('epsilon')
+            axs[1,li].set_xlabel('epsilon')
+            #axs[0,li].set_xticks([])
+            #axs[0,li].set_yticks([])
+            #axs[1,li].set_xticks([])
+            #axs[1,li].set_yticks([])
+        fig2.savefig(savepath + 'deltapertubation.pdf', bbox_inches='tight')
 elif args.todo=='gducheck':
     RMSE(BPTT, EP)
     if args.save:

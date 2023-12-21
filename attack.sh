@@ -8,4 +8,5 @@ python ./main.py \
     --save \
     --eps 0.1 0.25 0.4 0.5 0.6 0.75 1.0 1.25 1.5 1.75 \
     --todo attack \
-    --nbatches 5
+    --nbatches 5 \
+    --device $2 \

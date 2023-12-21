@@ -1152,30 +1152,32 @@ class energyModelWrapper(torch.nn.Module):
         mbs = x.size(0)
         device = x.device
         self.neurons = self.model.init_neurons(mbs, device)
-        not_mse = self.criterion.__class__.__name__.find('MSE')==-1
+      #  not_mse = self.criterion.__class__.__name__.find('MSE')==-1
 
-        neurons = self.neurons
-        for t in range(self.T):
-            phi = self.model.Phi(x, self.y, self.neurons, self.beta, self.criterion)
-            init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
-            if self.T < 30:
-                grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=True, retain_graph=True)
-            else:
-                grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=False)
+        self.neurons = self.model.forward(x, self.y, self.neurons, self.T, self.beta, criterion=self.criterion, check_thm=(self.T < 30))
 
-            for idx in range(len(neurons)-1):
-                neurons[idx] = self.model.activation( grads[idx] )
-                if self.T > 29:
-                    neurons[idx].requires_grad = True
+      #  neurons = self.neurons
+      #  for t in range(self.T):
+      #      phi = self.model.Phi(x, self.y, self.neurons, self.beta, self.criterion)
+      #      init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
+      #      if self.T < 30:
+      #          grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=True, retain_graph=True)
+      #      else:
+      #          grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=False)
 
-            if not_mse and not(self.model.softmax):
-                neurons[-1] = grads[-1]
-            else:
-                neurons[-1] = self.model.activation( grads[-1] )
+      #      for idx in range(len(neurons)-1):
+      #          neurons[idx] = self.model.activation( grads[idx] )
+      #          if self.T > 29:
+      #              neurons[idx].requires_grad = True
 
-            if self.T > 29:
-                neurons[-1].requires_grad = True
-        self.model.zero_grad()
+      #      if not_mse and not(self.model.softmax):
+      #          neurons[-1] = grads[-1]
+      #      else:
+      #          neurons[-1] = self.model.activation( grads[-1] )
+
+      #      if self.T > 29:
+      #          neurons[-1].requires_grad = True
+      #  self.model.zero_grad()
         if not self.model.softmax:
             return self.neurons[-1]
         else:
@@ -1184,10 +1186,16 @@ class energyModelWrapper(torch.nn.Module):
         super(energyModelWrapper, self).zero_grad()
         self.model.zero_grad()
 
-def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion, device, path, save_adv_examples=False, figs=False):
+def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion, device, path, norm=2, save_adv_examples=False, figs=False, deltapert=False):
     criterion.reduction='sum'
     mbs = loader.batch_size
     forwardmodel = energyModelWrapper(model)
+
+    #if hasattr(model, 'sparselayeridxs'): # lca models have specialized forward methods
+    #    forwardmodel.forward = lambda x: model.forward(x, forwardmodel.y, forwardmodel.neurons, forwardmodel.T, forwardmodel.beta, check_thm=(forwardmodel.T < 30), criterion=forwardmodel.criterion)
+    delta_right = list([0 for li in range(len(forwardmodel.model.synapses))])
+    delta_wrong = list([0 for li in range(len(forwardmodel.model.synapses))])
+
     beta = 0.0
     savepath = path + '/adversarial_examples/eps_{}/'.format(eps)
     os.makedirs(savepath, exist_ok=True)
@@ -1196,7 +1204,7 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
     mean = np.array([0.4914, 0.4822, 0.4465])[None,:,None,None]
     std = np.array([3*0.2023, 3*0.1994, 3*0.2010])[None,:,None,None]
     art_model = PyTorchClassifier(forwardmodel, loss=criterion, nb_classes=model.nc, input_shape=(mbs,model.channels[0], model.in_size, model.in_size), preprocessing=(mean,std))
-    art_PGD = ProjectedGradientDescentPyTorch(art_model, 2, eps, 2.5*eps/20, max_iter=20, batch_size=mbs)
+    art_PGD = ProjectedGradientDescentPyTorch(art_model, norm, eps, 2.5*eps/20, max_iter=20, batch_size=mbs, verbose=False)
     originals = []
     adv_examples = []
     preds = []
@@ -1213,23 +1221,41 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
         correct = (torch.from_numpy(pred) == y).sum().item()
         tot_correct += correct
 
+        if deltapert:
+            # simulate for T2-T1, so the original prediction has as many steps as the adversarial run
+            forwardmodel.neurons = forwardmodel.model.forward(x, forwardmodel.y, forwardmodel.neurons, attack_steps-predict_steps, forwardmodel.beta, criterion=forwardmodel.criterion, check_thm=False)
+            
+            print('orig L2', [n.norm(2) for n in forwardmodel.neurons])
+            neurons_orig = copy(forwardmodel.neurons)
+
         # design adversarial example and predict with that
         forwardmodel.setup(y, beta, attack_steps, criterion)
         x_adv = (art_PGD.generate(x.cpu().numpy())) # np.vectorize(loader.dataset.transform)
+        x_adv.clip(-2, 2) # clip large values (ensures large enough attacks start saturating values)
         forwardmodel.setup(y, beta, predict_steps, criterion)
         pred_adv = np.argmax(art_model.predict(x_adv), axis=1)
         correct_adv = (torch.from_numpy(pred_adv) == y).sum().item()        
         tot_correct_adv += correct_adv
 
-        pred_name = np.asarray(list(map(lambda i: loader.dataset.classes[i], pred)))
-        pred_adv_name = np.asarray(list(map(lambda i: loader.dataset.classes[i], pred_adv)))
         adv_success = torch.logical_and((torch.from_numpy(pred) == y), (torch.from_numpy(pred_adv) != y))
+        print('sh', pred.shape, adv_success.size(), neurons_orig[0].size())
         originals.append(x.cpu().numpy()[adv_success])
         adv_examples.append(x_adv[adv_success])
+        pred_name = np.asarray(list(map(lambda i: loader.dataset.classes[i], pred)))
+        pred_adv_name = np.asarray(list(map(lambda i: loader.dataset.classes[i], pred_adv)))
         preds.append(pred_name[adv_success])
         preds_adv.append(pred_adv_name[adv_success])
 
         print('Batch {} of {} : original accuracy={}, adversarial accuracy={}, attack success rate={}'.format(idx, nbatches, correct/y.size(0), correct_adv/y.size(0), adv_success.sum()/y.size(0)))
+
+        if deltapert:
+            neurons_adv = copy(forwardmodel.neurons)
+            print('adv  L2', [n.norm(2) for n in neurons_adv])
+
+            for li in range(len(neurons_orig)):
+                delta_right[li] += ( (neurons_adv[li] - neurons_orig[li])[np.logical_not(adv_success)].norm(2, dim=list(range(1,neurons_orig[li].dim())))/neurons_orig[li][np.logical_not(adv_success)].norm(2,dim=list(range(1,neurons_orig[li].dim()))) ).mean(dim=0) / nbatches
+                delta_wrong[li] += ( (neurons_adv[li] - neurons_orig[li])[adv_success].norm(2,dim=list(range(1,neurons_orig[li].dim())))/neurons_orig[li][adv_success].norm(2,dim=list(range(1,neurons_orig[li].dim()))) ).mean(dim=0) / nbatches
+
 
 
         #if (idx/len(loader))%0.1 < 0.001 and adv_success.sum() > 0:
@@ -1241,8 +1267,10 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
         np.save(savepath + '__examples.npy', np.asarray(adv_examples))
         np.save(savepath + '__original_pred.npy', np.asarray(preds))
         np.save(savepath + '__attacked_pred.npy', np.asarray(preds_adv))
+#    if deltapert:
+#        np.save(savepath + '__delta_pertubation_layers.npy', np.asarray([delta_right, delta_wrong]))
 
-    return tot_correct/nbatches/mbs, tot_correct_adv/nbatches/mbs, adv_examples, preds, preds_adv
+    return tot_correct/nbatches/mbs, tot_correct_adv/nbatches/mbs, adv_examples, preds, preds_adv, delta_right, delta_wrong
 
         
 def hebbian_syn_grads(model, x, y, neurons, beta, criterion, coeff=1):
@@ -1303,6 +1331,8 @@ def compute_lcaep_syn_grads(model, x, y, neurons_1, neurons_2, mp_1, mp_2, betas
     # use the reconstruction in the anti-nudged state (1) so this resembles a LCA rule learning to reconstruct
     pot_1 = [x] + mp_1 #[xhat] + 
     pot_2 = [x] + mp_2
+    #pot_2 = pot_1 # same features in potential, different activation patterns => should imprint features onto neurons that should be more active in nudge, disimprint the present features into those that don't help
+    # makes more sense for two-phase ep (no anti-nudge)
     act_1 = [x] + neurons_1
     act_2 = [x] + neurons_2
     #act_2 = act_1
@@ -1311,35 +1341,46 @@ def compute_lcaep_syn_grads(model, x, y, neurons_1, neurons_2, mp_1, mp_2, betas
 
     dphi = 0
 
-    for idx in model.sparse_layer_idxs:
-        #if idx-1 in model.sparse_layer_idxs:
-        #    p = pools[idx]
-        #else:
-        #    p = torch.nn.Identity()
+    for idx in range(len(model.synapses)): #model.sparse_layer_idxs:
+        if idx in model.sparse_layer_idxs:
+            pre_1 = pot_1
+            pre_2 = pot_2
+            pp = torch.nn.Identity()
+        else:
+            pre_1 = act_1
+            pre_2 = act_2
+            if idx < len(model.pools):
+                pp = model.pools[idx]
+        if idx-1 in model.sparse_layer_idxs:
+            p = pools[idx]
+        else:
+            p = torch.nn.Identity()
         if isinstance(model.synapses[idx], torch.nn.Conv2d):
             model.synapses[idx].requires_grad_(True)
-            dphi += ( act_2[idx+1] * model.synapses[idx](pools[idx](pot_2[idx])) ).sum()
-            dphi -= ( act_1[idx+1] * model.synapses[idx](pools[idx](pot_1[idx])) ).sum()
+            dphi += ( act_2[idx+1] * pp(model.synapses[idx](p(pre_2[idx]))) ).sum()
+            dphi -= ( act_1[idx+1] * pp(model.synapses[idx](p(pre_1[idx]))) ).sum()
             #model.synapses[idx].requires_grad_(False)
         elif isinstance(model.synapses[idx], torch.nn.Linear):
             model.synapses[idx].requires_grad_(True)
-            dphi += ( act_2[idx+1] * model.synapses[idx](pools[idx](pot_2[idx]).view(mbs,-1)) ).sum()
-            dphi -= ( act_1[idx+1] * model.synapses[idx](pools[idx](pot_1[idx]).view(mbs,-1)) ).sum()
+            dphi += ( act_2[idx+1] * (model.synapses[idx](p(pre_2[idx]).view(mbs,-1))) ).sum()
+            dphi -= ( act_1[idx+1] * (model.synapses[idx](p(pre_1[idx]).view(mbs,-1))) ).sum()
             #model.synapses[idx].requires_grad_(False)
+            
     # hybrid of EP, but similar to deep LCA taking the "outer product" of error and activation in the above layer 
     (dphi.sum()/(betas[0]-betas[1])).backward() # minimizing optimizer should strengthen attractor two and weaken attractor one
 
     #for s in model.synapses:
-    #with torch.no_grad():
-    #    # average gradient by how much that feature was active across space (2,3) and batches (0)
-    #    for j in model.sparse_layer_idxs:
-    #        if isinstance(model.synapses[j], torch.nn.Conv2d):
-    #            model.synapses[j].weight.grad.div_(neurons_1[j].norm(0, dim=(0,2,3))[:,None,None,None] + 1e-5) # average gradient by amount the feature was active (activity in latent layer) in the batch
-    #        elif isinstance(model.synapses[j], torch.nn.Linear):
-    #            model.synapses[j].weight.grad.div_(neurons_1[j].norm(0, dim=0)[:,None] +1e-5)
+
+   # with torch.no_grad():
+   #     # average gradient by how much that feature was active across space (2,3) and batches (0)
+   #     for j in model.sparse_layer_idxs:
+   #         if isinstance(model.synapses[j], torch.nn.Conv2d):
+   #             model.synapses[j].weight.grad.div_((neurons_2[j].norm(0, dim=(0,2,3))+neurons_1[j].norm(0, dim=(0,2,3)))[:,None,None,None] + 1e-5) # average gradient by amount the feature was active (activity in latent layer) in the batch
+   #         elif isinstance(model.synapses[j], torch.nn.Linear):
+   #             model.synapses[j].weight.grad.div_((neurons_2[j].norm(0, dim=0) + neurons_1[j].norm(0, dim=0))[:,None] +1e-5)
 
 def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs, criterion, alg='EP', 
-          random_sign=False, save=False, check_thm=False, path='', checkpoint=None, thirdphase = False, scheduler=None, cep_debug=False, tensorboard=False):
+          random_sign=False, save=False, check_thm=False, path='', checkpoint=None, thirdphase = False, scheduler=None, cep_debug=False, tensorboard=False, annealcompetition=False, keep_checkpoints=0):
     
 
     mbs = train_loader.batch_size
@@ -1403,6 +1444,9 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
         recon_err = 0
         model.train()
 
+        if annealcompetition and epoch+epoch_sofar <= 10:
+            model.inhibitstrength = (epoch+epoch_sofar)/10
+            print('competition annealer: inhibition strength coeff. now = ', model.inhibitstrength)
         if hasattr(model, 'postupdate'):
             model.postupdate()
         if hasattr(model, 'lat_syn'):
@@ -1549,8 +1593,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
 
                 for j, g in enumerate(optimizer.param_groups):
                     if g['lr'] == 0.0: # decoupling other layers we don't want to interfere in the LCA training phase
-                        self.synapses[j].weight.zero_() # fc layer required based on how code is written, but don't want it to interfere
-                        self.synapses[j].bias.zero_() # fc layer required based on how code is written, but don't want it to interfere
+                        model.synapses[j].weight.zero_() # fc layer required based on how code is written, but don't want it to interfere
+                        model.synapses[j].bias.zero_() # fc layer required based on how code is written, but don't want it to interfere
             if alg =="LCA" or alg=="LCAEP":
                 xhat = F.conv_transpose2d(neurons[0], model.synapses[0].weight, padding=model.synapses[0].padding, stride=model.synapses[0].stride)
 
@@ -1639,9 +1683,6 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                 else:
                     model.compute_syn_grads(x, y, neurons_1, neurons_2, betas[:2], criterion)
 
-                if reconstruct:
-                    #print('grads mean', [l.weight.grad.mean().item() for l in model.synapses], 'grads max', [l.weight.grad.max().item() for l in model.synapses], 'grads min', [l.weight.grad.min().item() for l in model.synapses])
-                    model.synapses[0].weight.grad.div_(neurons[1].norm(1, dim=(0,2,3))[:,None,None,None]/2 +1.0) # average gradient by amount the feature was active in the batch
                 #print('grads mean', [l.weight.grad.mean().item() for l in model.synapses], 'grads max', [l.weight.grad.max().item() for l in model.synapses], 'grads min', [l.weight.grad.min().item() for l in model.synapses])
                 optimizer.step()      
                 if hasattr(model, 'postupdate'):
@@ -1663,12 +1704,15 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     neurons_3 = copy(neurons)
                     mp_3 = copy(model.membpotes)
                     #model.compute_syn_grads(x, y, mp_2, mp_3, (beta_2, beta_3), criterion)
-                    compute_lcaep_syn_grads(model, x, y, neurons_2, neurons_3, mp_2, mp_3, (beta_2, beta_3), criterion)
+                    model.compute_syn_grads(x, y, neurons_2, neurons_3, (beta_2, beta_3), criterion)
+                    #compute_lcaep_syn_grads(model, x, y, neurons_2, neurons_3, mp_2, mp_3, (beta_2, beta_3), criterion)
                 else:
-                    compute_lcaep_syn_grads(model, x, y, neurons_1, neurons_2, mp_1, mp_2, betas[:2], criterion)
+                    #model.compute_syn_grads(x, y, mp_1, mp_2, (beta_1, beta_2), criterion)
+                    model.compute_syn_grads(x, y, neurons_1, nuerons_2, (beta_1, beta_2), criterion)
+                    #compute_lcaep_syn_grads(model, x, y, neurons_1, neurons_2, mp_1, mp_2, betas[:2], criterion)
                 optimizer.step()      
-                if hasattr(model, 'postupdate'):
-                    model.postupdate()
+                #if hasattr(model, 'postupdate'):
+                #    model.postupdate()
                 
             elif alg=='CEP':
                 if random_sign and (beta_1==0.0):
@@ -1772,9 +1816,9 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                       timeSince(start, ((idx+1)+epoch*iter_per_epochs)/(epochs*iter_per_epochs)))
                 if alg == 'EP' or alg == 'CEP' or alg=="LCAEP":
                     print('\tL2 neurons_1-neurons_2 : ', [(neurons_1[idx]-neurons_2[idx]).norm(2).item() for idx in range(len(neurons_1))])
-                if thirdphase:
-                    print('\tL2 neurons_1-neurons_3 : ', [(neurons_1[idx]-neurons_3[idx]).norm(2).item() for idx in range(len(neurons_1))])
-                    print('\tL2 neurons_2-neurons_3 : ', [(neurons_2[idx]-neurons_3[idx]).norm(2).item() for idx in range(len(neurons_1))])
+                    if thirdphase:
+                        print('\tL2 neurons_1-neurons_3 : ', [(neurons_1[idx]-neurons_3[idx]).norm(2).item() for idx in range(len(neurons_1))])
+                        print('\tL2 neurons_2-neurons_3 : ', [(neurons_2[idx]-neurons_3[idx]).norm(2).item() for idx in range(len(neurons_1))])
                 if isreconstructmodel or alg=="LCA" or alg=="LCAEP":
                     print('\tReconstruction error (L2) :\t', recon_err)
                 if isinstance(model, VF_CNN): 
@@ -1914,6 +1958,8 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
             save_dic['scheduler'] = scheduler.state_dict() if scheduler is not None else None
             torch.save(save_dic,  path + '/checkpoint.tar')
             torch.save(model, path + '/model.pt')
+            if keep_checkpoints > 0 and epoch% keep_checkpoints == 0:
+                torch.save(model, path + '/model_{}.pt'.format(epoch+epoch_sofar))
             if test_correct > best:
                 best = test_correct
                 save_dic = {'model_state_dict': model.state_dict(), 'opt': optimizer.state_dict(),

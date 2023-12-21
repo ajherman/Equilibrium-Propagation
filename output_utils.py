@@ -46,6 +46,7 @@ parser.add_argument('--cep-debug', default = False, action = 'store_true', help=
 
 
 parser.add_argument('--train-lateral', default = False, action = 'store_true', help='whether to enable the lateral/hopfield interactions (default: False)')
+parser.add_argument('--use-lateral', default = False, action = 'store_true', help='whether to enable the lateral/hopfield interactions (default: False)')
 parser.add_argument('--lat-layers', nargs='+', type = int, default = [], help='index of layers to add lateral connections to (ex: 0 1 -1) to add lateral interactions to first and second layer, last layer')
 parser.add_argument('--lat-kernels', nargs='+', type = int, default = [], help='kernel size of convolutional lateral interaction. Must be odd numbers. Should have length equal to the number of --lat-layers indexes which have a convolutional input. Other layer indexes will be fully connected (like their input). For use with LatConvCNN')
 parser.add_argument('--sparse-layers', nargs='+', type = int, default = [], help='index of layers to add lateral connections to trained to make the neurons sparse (via an L1 penalty with coeffecient lambdas[1])')

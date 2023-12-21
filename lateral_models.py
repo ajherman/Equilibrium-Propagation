@@ -751,11 +751,12 @@ class LCACNN(lat_CNN):
 
 
 class autoLCACNN(P_CNN):
-    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=hard_sigmoid, softmax=False, dt=0.01, sparse_layer_idxs=[0], lambdas=[0.1]):
+    def __init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=hard_sigmoid, softmax=False, dt=0.01, sparse_layer_idxs=[0], lambdas=[0.1], inhibitstrength=1.0):
         P_CNN.__init__(self, in_size, channels, kernels, strides, fc, pools, paddings, activation=activation, softmax=softmax)
         self.origdt = dt
         self.layerlambdas = lambdas
         self.sparse_layer_idxs = sparse_layer_idxs
+        self.inhibitstrength = inhibitstrength
 
     def Phi(self, x, y, neurons, beta, criterion):
 
@@ -780,7 +781,8 @@ class autoLCACNN(P_CNN):
                     p = torch.nn.Identity()
                 else:
                     p = self.pools[idx-1]
-                phi -= (p(target)-F.conv_transpose2d(layers[idx+1], self.synapses[idx].weight, padding=self.synapses[idx].padding, stride=self.synapses[idx].stride, bias=None)).pow(2).sum(dim=(1,2,3))*0.5
+                #phi -= (p(target)-F.conv_transpose2d(layers[idx+1], self.synapses[idx].weight, padding=self.synapses[idx].padding, stride=self.synapses[idx].stride, bias=None)).pow(2).sum(dim=(1,2,3))*0.5
+                phi -= self.inhibitstrength*(F.conv_transpose2d(layers[idx+1], self.synapses[idx].weight, padding=self.synapses[idx].padding, stride=self.synapses[idx].stride, bias=None)).pow(2).sum(dim=(1,2,3))*0.5
             elif isinstance(self.synapses[idx], torch.nn.Linear):
                 if isinstance(self.synapses[idx-1], torch.nn.Conv2d):
                     p = self.pools[idx-1]
@@ -790,14 +792,18 @@ class autoLCACNN(P_CNN):
 
         # remaning layers are simple hopfield energy
         for idx in range(conv_len):
-            if idx not in self.sparse_layer_idxs:
-                if idx-1 in self.sparse_layer_idxs:
-                    # prevent feedback to sparse layer from hopfield layers with .detach() to hide gradient
-                    # pool representation, since we don't apply the pool to its input already so all values are part of state not only max 
-                    #.detach()
-                    phi += torch.sum( self.pools[idx](self.synapses[idx](self.pools[idx-1](layers[idx].detach()))).detach() * layers[idx+1], dim=(1,2,3)).squeeze()     
-                else:
-                    phi += torch.sum( self.pools[idx](self.synapses[idx](layers[idx])) * layers[idx+1], dim=(1,2,3)).squeeze()     
+            if idx in self.sparse_layer_idxs:
+                # pool representation, since we don't apply the pool to its input already so all values are part of state not only max 
+                p = torch.nn.Identity()
+            else:
+                p = self.pools[idx]
+
+            if idx-1 in self.sparse_layer_idxs:
+                # prevent feedback to sparse layer from hopfield layers with .detach() to hide gradient
+                #.detach()
+                phi += torch.sum( p(self.synapses[idx](self.pools[idx-1](layers[idx]))) * layers[idx+1], dim=(1,2,3)).squeeze()     
+            else:
+                phi += torch.sum( p(self.synapses[idx](layers[idx])) * layers[idx+1], dim=(1,2,3)).squeeze()     
 
         #Phi computation changes depending on softmax == True or not
         if not self.softmax:
@@ -843,8 +849,9 @@ class autoLCACNN(P_CNN):
         not_mse = (criterion.__class__.__name__.find('MSE')==-1)
         mbs = x.size(0)
         device = x.device     
+
         for s in self.synapses:
-            s.requires_grad_(False) # for ep, we dont' even need gradients on the weights during evaluation, since we calculate this with the theorem.
+            s.requires_grad_(False) # for ep, we dont' need gradients on the weights even during training evaluation, since we calculate this with the theorem.
         
         #if check_thm:
         #    for t in range(T):
@@ -870,27 +877,27 @@ class autoLCACNN(P_CNN):
             #init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
             #grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=False)
              
-            phi.sum().backward()
+            phi.sum().backward(retain_graph = check_thm)
 
             #self.dt = mbs*1/((neurons[0].grad-neurons[0]).norm(2)+5*mbs) # timestep adapts to make each step the same size, with maximum of 0.1
-            with torch.no_grad(): # must turn off grad so the computation graph doesn't get too smart and go backwards to past iterations using membpotes
-                # integrate representation  layer gradient into non-thresholded membrane potential, then view this with ReLu
-                for idx in range(len(neurons)):
-                    if idx in self.sparse_layer_idxs:
-                        if idx < len(neurons)-1: # don't apply L2 decay on membrane potential if there isn't a layer above
-                            self.membpotes[idx].mul_(1-self.dt)
-                        self.membpotes[idx].add_(self.dt*(neurons[idx].grad))#- neurons[0])#
-                        if self.membpotes[idx].grad is not None:
-                            self.membpotes[idx].add_(self.dt*self.membpotes[idx].grad)
-                        neurons[idx] = F.relu(self.membpotes[idx] - self.layerlambdas[idx])
-                        neurons[idx].requires_grad = True
-                    else:
-                        # remaining layers do classic hopfield dynamics
-                        neurons[idx].mul_(1-auxdt)
-                        #neurons[idx].add_(self.dt*grads[idx])
-                        neurons[idx].add_(auxdt*neurons[idx].grad)
-                        neurons[idx] = self.activation( neurons[idx] )
-                        neurons[idx].requires_grad = True
+            #with torch.no_grad(): # must turn off grad so the computation graph doesn't get too smart and go backwards to past iterations using membpotes
+            # integrate representation  layer gradient into non-thresholded membrane potential, then view this with ReLu
+            for idx in range(len(neurons)):
+                if idx in self.sparse_layer_idxs:
+                    if idx < len(neurons)-1: # don't apply L2 decay on membrane potential if there isn't a layer above
+                        self.membpotes[idx].mul_(1-self.dt)
+                    self.membpotes[idx].add_(self.dt*(neurons[idx].grad))#- neurons[0])#
+                    if self.membpotes[idx].grad is not None:
+                        self.membpotes[idx].add_(self.dt*self.membpotes[idx].grad)
+                    neurons[idx] = F.relu(self.membpotes[idx] - self.layerlambdas[idx])
+                    neurons[idx].requires_grad = True
+                else:
+                    # remaining layers do classic hopfield dynamics
+                    neurons[idx].mul_(1-auxdt)
+                    #neurons[idx].add_(self.dt*grads[idx])
+                    neurons[idx].add_(auxdt*neurons[idx].grad)
+                    neurons[idx] = self.activation( neurons[idx] )
+                    neurons[idx].requires_grad = True
 
             #maxdt = 2*self.origdt
             #if self.dt < maxdt:
@@ -898,8 +905,6 @@ class autoLCACNN(P_CNN):
             #    if self.dt > maxdt:
             #        self.dt = maxdt
          
-            
-            #if not_mse and not(self.softmax):
             #    neurons[-1] = grads[-1]
             #else:
             #    neurons[-1] = self.activation( grads[-1] )
@@ -1011,16 +1016,18 @@ class autoLCACNN(P_CNN):
         for idx in range(len(self.synapses)):
             self.synapses[idx].weight.requires_grad_(True)
         
+        #energy = self.Phi
+        energy = self.Hopfield
         beta_1, beta_2 = betas
         
         self.zero_grad()            # p.grad is zero
         if not(check_thm):
-            phi_1 = self.Hopfield(x, y, neurons_1, beta_1, criterion)
+            phi_1 = energy(x, y, neurons_1, beta_1, criterion)
         else:
-            phi_1 = self.Hopfield(x, y, neurons_1, beta_2, criterion)
+            phi_1 = energy(x, y, neurons_1, beta_2, criterion)
         phi_1 = phi_1.mean()
         
-        phi_2 = self.Hopfield(x, y, neurons_2, beta_2, criterion)
+        phi_2 = energy(x, y, neurons_2, beta_2, criterion)
         phi_2 = phi_2.mean()
         
         delta_phi = (phi_2 - phi_1)/(beta_1 - beta_2)        
@@ -1040,6 +1047,11 @@ class autoLCACNN(P_CNN):
                     self.synapses[j].weight.div_(self.synapses[j].weight.norm(2, dim=1)[:,None] + 1e-6)
                 self.synapses[j].bias.zero_()
 
+
+
+
+class gradLCACNN(autoLCACNN):
+    def forward(self
 
 # lateral-connectivity on logit/classification output layer to produce softmax-like behaviour CNN
 class fake_softmax_CNN(lat_CNN):
