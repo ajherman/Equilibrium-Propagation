@@ -5,11 +5,11 @@ python ../main.py \
     --task 'CIFAR10' \
     --channels 64 128 256 256 \
     --kernels 8 4 4 4 \
-    --pools 'mmmm' \
-    --strides 1 1 1 1 \
+    --pools 'iiiM' \
+    --strides 1 1 2 2 \
     --paddings 4 1 1 1 \
     --sparse-layers 0 1 2 3 4 \
-    --lambdas 0.1 0.05 0.005 0.005 0.005 \
+    --lambdas 0.1 0.05 0.005 0.005 0.05 \
     --fc 10 \
     --optim 'sgd' \
     --mmt 0.9 \

@@ -1,0 +1,35 @@
+#!/bin/sh
+python ../main.py \
+    --model 'autoLCACNN' \
+    --alg 'LCAEP' \
+    --thirdphase \
+    --scale 0.5 \
+    --task 'CIFAR10' \
+    --channels 64 128 256 256 \
+    --kernels 6 3 3 3 \
+    --lrs 2.5e-2 1.5e-1 1.0e-1 8.0e-2  5.0e-2 \
+    --lr-decay \
+    --wds 3e-4 3e-4 3e-4 3e-4 3e-4 3e-4 \
+    --pools 'mmmm' \
+    --strides 1 1 1 1 \
+    --paddings 3 1 1 0 \
+    --sparse-layers 0 \
+    --lambdas 0.2 \
+    --fc 10 \
+    --optim 'sgd' \
+    --mmt 0.9 \
+    --act 'my_hard_sig' \
+    --todo 'train' \
+    --betas 0.0 0.5 \
+    --T1 600 \
+    --T2 50 \
+    --mbs 128 \
+    --data-aug \
+    --save  \
+    --device $2 \
+    --seed $1 \
+    --epochs 120 \
+    --tensorboard \
+    --dt 0.01 \
+    --load-path-convert results/LCA/mse/2023-09-29/11-55-36_gpu1 \
+    --convert-place-layers 0 - - - \

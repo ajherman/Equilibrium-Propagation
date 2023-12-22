@@ -23,8 +23,8 @@ python ../main.py \
     --loss 'mse' \
     --data-aug \
     --save  \
-    --device 0 \
+    --device 1 \
     --seed 8453 \
     --epochs 45 \
-    --load-path results/EP/mse/2023-08-03/14-38-36_gpu0 \
+    --load-path results/EP/mse/2023-09-28/16-28-36_gpu0 \
 

@@ -1238,7 +1238,6 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
         tot_correct_adv += correct_adv
 
         adv_success = torch.logical_and((torch.from_numpy(pred) == y), (torch.from_numpy(pred_adv) != y))
-        print('sh', pred.shape, adv_success.size(), neurons_orig[0].size())
         originals.append(x.cpu().numpy()[adv_success])
         adv_examples.append(x_adv[adv_success])
         pred_name = np.asarray(list(map(lambda i: loader.dataset.classes[i], pred)))

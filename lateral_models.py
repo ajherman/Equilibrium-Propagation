@@ -768,14 +768,15 @@ class autoLCACNN(P_CNN):
         phi = 0.0
 
         for idx in self.sparse_layer_idxs:
-            # layer no longer simply has hopfield pairwise product energy, but minimizes L2 of reconstruction error
-            # mathematically equivelant to adding lateral interactions = - 1/2 feature inner products, but faster to do with autograd rather than another convolution
-            # layers[idx]- could be replaced by a seperate dot product term like other layers for input drive. Faster to do competition and drive together in one term though.
-            if idx-1 in self.sparse_layer_idxs: # for stacked LCA, membrane potential is fed to next layer to reconstruct, not actual activations
-                target = self.membpotes[idx-1]
-                target.grad = None
-            else:
-                target = layers[idx]
+            #creates a lot of problems when the grad is on the membpotes instead of the neurons.
+            # # layer no longer simply has hopfield pairwise product energy, but minimizes L2 of reconstruction error
+            # # mathematically equivelant to adding lateral interactions = - 1/2 feature inner products, but faster to do with autograd rather than another convolution
+            # # layers[idx]- could be replaced by a seperate dot product term like other layers for input drive. Faster to do competition and drive together in one term though.
+            # if idx-1 in self.sparse_layer_idxs: # for stacked LCA, membrane potential is fed to next layer to reconstruct, not actual activations
+            #     target = self.membpotes[idx-1]
+            #     target.grad = None
+            # else:
+            target = layers[idx]
             if isinstance(self.synapses[idx], torch.nn.Conv2d):
                 if idx < 1:
                     p = torch.nn.Identity()
@@ -874,29 +875,41 @@ class autoLCACNN(P_CNN):
         for t in range(T):
 
             phi = self.Phi(x, y, neurons, beta, criterion)
-            #init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
-            #grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=False)
+            init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
+            grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=check_thm)
              
-            phi.sum().backward(retain_graph = check_thm)
+            #print('neurons grad before', [type(n.grad) for n in neurons])
+            #print('neurons grad before', [(n.requires_grad) for n in neurons])
+            #print('neurons leaf before', [(n.is_leaf) for n in neurons])
+            #print('membpot grad before', [type(m.grad) for m in self.membpotes])
+            #phi.sum().backward(retain_graph = check_thm)
+            #print('neurons grad after ', [type(n.grad) for n in neurons])
+            #print('neurons grad after ', [(n.requires_grad) for n in neurons])
+            #print('neurons leaf after ', [(n.is_leaf) for n in neurons])
+            #print('membpot grad after ', [type(m.grad) for m in self.membpotes])
 
-            #self.dt = mbs*1/((neurons[0].grad-neurons[0]).norm(2)+5*mbs) # timestep adapts to make each step the same size, with maximum of 0.1
+            ##self.dt = mbs*1/((neurons[0].grad-neurons[0]).norm(2)+5*mbs) # timestep adapts to make each step the same size, with maximum of 0.1
             #with torch.no_grad(): # must turn off grad so the computation graph doesn't get too smart and go backwards to past iterations using membpotes
             # integrate representation  layer gradient into non-thresholded membrane potential, then view this with ReLu
             for idx in range(len(neurons)):
                 if idx in self.sparse_layer_idxs:
                     if idx < len(neurons)-1: # don't apply L2 decay on membrane potential if there isn't a layer above
-                        self.membpotes[idx].mul_(1-self.dt)
-                    self.membpotes[idx].add_(self.dt*(neurons[idx].grad))#- neurons[0])#
-                    if self.membpotes[idx].grad is not None:
-                        self.membpotes[idx].add_(self.dt*self.membpotes[idx].grad)
+                        #self.membpotes[idx].mul_(1-self.dt)
+                        self.membpotes[idx] = (1-self.dt)*self.membpotes[idx] + self.dt*grads[idx]
+                    else:
+                        self.membpotes[idx] = self.membpotes[idx] + self.dt*grads[idx]
+                    if self.membpotes[idx].is_leaf:
+                        self.membpotes[idx].requires_grad = True
+                    #self.membpotes[idx].add_(self.dt*(grads[idx]))#- neurons[0])#
+                    #if self.membpotes[idx].grad is not None:
+                    #    self.membpotes[idx].add_(self.dt*self.membpotes[idx].grad)
                     neurons[idx] = F.relu(self.membpotes[idx] - self.layerlambdas[idx])
-                    neurons[idx].requires_grad = True
                 else:
                     # remaining layers do classic hopfield dynamics
-                    neurons[idx].mul_(1-auxdt)
-                    #neurons[idx].add_(self.dt*grads[idx])
-                    neurons[idx].add_(auxdt*neurons[idx].grad)
-                    neurons[idx] = self.activation( neurons[idx] )
+                    #neurons[idx].mul_(1-auxdt)
+                    #neurons[idx].add_(auxdt*grads[idx])
+                    neurons[idx] = self.activation( (1-auxdt)*neurons[idx] + auxdt*grads[idx] )
+                if neurons[idx].is_leaf:
                     neurons[idx].requires_grad = True
 
             #maxdt = 2*self.origdt
@@ -1049,9 +1062,6 @@ class autoLCACNN(P_CNN):
 
 
 
-
-class gradLCACNN(autoLCACNN):
-    def forward(self
 
 # lateral-connectivity on logit/classification output layer to produce softmax-like behaviour CNN
 class fake_softmax_CNN(lat_CNN):
