@@ -9,13 +9,38 @@ s = ArgParseSettings(autofix_names = true)
 @add_arg_table! s begin
     "--model"
         help = "model"
-        default = "MLP"
+        default = "CNN"
     "--task"
         help = "which datset (CIFAR10 or MNIST)"
-        default = "MNIST"
+        default = "CIFAR10"
     "--archi"
-        help = "architecture"
+        help = "architecture for MLP (number of neurons by layer)"
         default = [784, 512, 10]
+        nargs = '*'
+        arg_type = Int
+    "--channels"
+        help = "number of channels in each layer for a CNN"
+        default = [128, 256, 512]
+        nargs = '*'
+        arg_type = Int
+    "--kernels"
+        help = "convolutional kernel width in each layer for a CNN"
+        default = [3, 3, 3]
+        nargs = '*'
+        arg_type = Int
+    "--paddings"
+        help = "padding in each layer for a CNN"
+        default = [0, 0, 0]
+        nargs = '*'
+        arg_type = Int
+    "--strides"
+        help = "convolutional stride in each layer for a CNN"
+        default = [1, 1, 1]
+        nargs = '*'
+        arg_type = Int
+    "--fc"
+        help = "number of neurons in fully connected portion after convolutional layers"
+        default = []
         nargs = '*'
         arg_type = Int
     "--lrs"
@@ -37,13 +62,17 @@ s = ArgParseSettings(autofix_names = true)
         default = 100
         arg_type = Int
     "--T1"
-        help = "duration of first phase"
+        help = "number of timesteps of first phase"
         default = 100
         arg_type = Int
     "--T2"
-        help = "duration of second phase"
+        help = "number of timesteps of second phase"
         default = 10
         arg_type = Int
+    "--dt"
+        help = "duration of timestep"
+        default = 1.0f-2
+        arg_type = Float32
     "--betas"
         help = "betas (nudging strength. First value should be 0 for free phase)"
         default = [0.0f0, 0.01f0]
@@ -136,6 +165,8 @@ elseif args.act=="my_hard_sig"
     activation = my_hard_sig
 elseif args.act=="ctrd_hard_sig"
     activation = ctrd_hard_sig
+elseif args.act == "relu"
+    activation = Flux.relu
 end
 
 if args.task == "MNIST" || args.task == "CIFAR10"
@@ -145,15 +176,17 @@ end
 if args.task == "MNIST"
     Dataset = MNIST
     channels = vcat([1], args.channels)
+    insize = 28
 elseif args.task == "CIFAR10"
     Dataset = CIFAR10
     channels = vcat([3], args.channels) # rgb
+    insize = 32
 else
     throw(error("invalid dataset $(args.dataset)"))
 end
 
 kernels = args.kernels
-@assert len(kernels) == len(channels)-1 "invalid architecture specification"
+@assert length(kernels) == length(channels)-1 "number of channels does not match number of kernels"
 
 if args.load_path == ""
     if args.model == "MLP"
@@ -161,11 +194,19 @@ if args.load_path == ""
         archi = args.archi
         synapses = collect([Dense(archi[i] => archi[i+1], activation, bias=true, init=Flux.glorot_uniform) for i in 1:length(archi)-1])
     elseif args.model == "CNN"
-        synapses = collect([Conv((kernels[i], kernels[i]), channels[i] => channels[i+1], activation, bias=true, init=Flux.glorot_uniform) for i in eachindex(kernels)]) 
-        size = ...
-        for idx in eachidx(fc)
-            append!(synapses, Dense(size => fc[idx], activation, bias=true))
-            size = fc[idx]
+        synapses = [] # collect([Conv((kernels[i], kernels[i]), channels[i] => channels[i+1], activation, bias=true, init=Flux.glorot_uniform) for i in eachindex(kernels)]) 
+        size = insize
+        archi = [(insize, insize, channels[1])]
+        for i in eachindex(kernels)
+            append!(synapses, [Conv((kernels[i], kernels[i]), channels[i] => channels[i+1], pad=args.paddings[i], stride=args.strides[i], init=Flux.glorot_uniform, bias=false)])
+            global size = floor( ( size + 2*args.paddings[i] - kernels[i] + 1 ) / args.strides[i] )
+            append!(archi, [(size, size, channels[i+1])])
+        end
+        size = size*size*channels[end]
+        for idx in eachindex(args.fc)
+            append!(synapses, [Dense(size => args.fc[idx], activation, bias=true)])
+            global size = args.fc[idx]
+            append!(archi, [size])
         end
     end
 else
@@ -175,14 +216,12 @@ else
     optimizer = save_state.opt
 end
 
-synapses = synapses |> device
-
-
 if args.todo == "train"
     if args.model == "MLP"
-        transform = x -> reshape(x, (:, size(x, end))) 
+        transform = x -> reshape(x, (:, size(x)[end])) 
     elseif args.model == "CNN"
-        transform = x -> reshape(x, (size(x)[1:2]..., channels[1], size(x)[end]))
+        #transform = x -> reshape(x, (size(x)[1:2]..., channels[1], size(x)[end]))
+    end
     train_loader = Flux.BatchView(Flux.shuffleobs(Dataset(split=:train)), batchsize=mbs)
     test_loader  = Flux.BatchView(Flux.shuffleobs(Dataset(split=:test )), batchsize=mbs)
 
@@ -192,6 +231,10 @@ if args.todo == "train"
     end
 
     println(string(layeroptimizers)[1:300], "...")
-    EnergyModels.trainEP(archi, synapses, layeroptimizers, train_loader, test_loader, args.T1, args.T2, args.betas, device, args.epochs,
+    if args.alg == "EP"
+        EnergyModels.trainEP(archi, synapses, layeroptimizers, train_loader, test_loader, args.T1, args.T2, args.betas, device, args.epochs,
             random_sign=args.random_sign, save=args.save, path=path, thirdphase=args.thirdphase)
+    elseif args.alg == "LCA"
+        EnergyModels.trainLCA!(archi, args, synapses, layeroptimizers, train_loader, test_loader, device, path=path)
+    end
 end

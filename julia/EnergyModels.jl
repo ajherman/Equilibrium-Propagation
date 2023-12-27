@@ -68,8 +68,12 @@ function compute_syn_grads(synapses, x, y, neurons_1, neurons_2, beta_1, beta_2)
     return syn_grads[1]
 end
 
+
 function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, betas, device, epochs,
                         ; random_sign=false, save=false, path="", checkpoint=nothing, thirdphase=false)
+    synapses = synapses |> device
+
+
     # energymodel = energymodelimplicit
     energymodel = energymodelanalytical
     
@@ -198,5 +202,124 @@ function trainEP(archi, synapses, optimizer, train_loader, test_loader, T1, T2, 
         jldsave(path * "/final.jld2", model_state=save_dic)
     end
 
+end
+
+
+
+
+function lca!(x, xhat, memp, neurons, W, WT, T, dt=0.01)
+    for t in 1:T
+        xhat = WT(neurons[1])
+        memp += dt*(W(x-xhat) - neurons[1] - memp)
+        neurons[1] = activation(memp)
+    end
+    xhat = WT(neurons[1])
+end
+
+function compute_lca_syn_grads(synapses, x, xhat, neurons)
+    syn_grads = Flux.gradient(synapses) do syn
+        return syn[1](x - xhat)*neurons[1] # W grad = (representation y outer product (x-xhat)) ----> d/dW ( W[x - xhat] * y ) 
+    end
+
+    return syn_grads[1]
+end
+
+
+function postupdate!(W, WT)
+    # load forward weights into WT
+    s = Flux.state(WT)
+    snew = (s..., weight=Flux.transpose(W.weight, (4,3)))
+    Flux.loadmodel!(WT, snew)
+end
+
+function trainLCA!(archi, args, synapses, layeroptimizers, train_loader, test_loader, device; path=path, checkpoint=nothing)
+    
+    
+    mbs = Flux.batchsize(train_loader)
+    # mbs = size(first(train_loader)[1])[end]
+    iter_per_epochs = length(train_loader)
+    starttime = Dates.now()
+
+    if checkpoint === nothing
+        train_acc = [0.0]
+        test_acc = [0.0]
+        best = 0.0
+        epoch_sofar = 0
+     else
+        train_acc   = checkpoint["train_acc"]
+        test_acc    = checkpoint["test_acc"]
+        best        = checkpoint["best"]
+        epoch_sofar = checkpoint["epoch"]
+    end
+
+
+    train_loader = train_loader |> device
+    test_loader = test_loader |> device
+    synapses = synapses |> device
+    layeroptimizers = layeroptimizers .|> device
+    initneurons = collect([zeros(n..., mbs) for n in archi[2:end]]) |> device
+    #neurons_1 = collect([zeros(n..., mbs) for n in archi[2:end]]) |> device
+    #neurons_2 = collect([zeros(n..., mbs) for n in archi[2:end]]) |> device
+    neurons = collect([zeros(n..., mbs) for n in archi[2:end]]) |> device
+    memp = collect([zeros(n..., mbs) for n in archi[2:end]]) |> device
+    xhat = zeros(archi[1]..., mbs)
+
+    W = synapses[1]
+    WT = Flux.ConvTranspose(size(W.weight)[1:2], size(W.weight)[3] => size(W.weight)[4], identity, pad=W.pad, stride=W.stride, bias=false, init=zeros)
+
+    postupdate!(W, WT)
+
+    for epoch in 1:args.epochs
+        run_correct = 0
+        run_total = 0
+
+        for (idx, (x, y)) in enumerate(train_loader)
+            #x = reshape(x, (:, size(x)[end])) # flatten image input for MLP
+            x = x |> device
+
+            neurons[:] .= initneurons[:]
+            
+            lca!(x, xhat, memp, neurons, synapses[1], args.T1, args.dt)
+            
+            syn_grads = compute_lca_syn_grads(synapses, x, xhat, neurons)
+
+            # update weights
+            Flux.update!.(layeroptimizer, synapses, syn_grads)
+            postupdate!(synapses[1], WT)
+
+            # print progress
+            if mod(idx, round(iter_per_epochs/10)) == 0
+                recon_err = sum((x-xhat)^2)
+                timesince = Dates.now() - starttime
+                percent = (idx + (epoch-1)*iter_per_epochs) / (epochs*iter_per_epochs)
+                remaining = (Dates.Nanosecond(timesince).value * percent * (epochs*iter_per_epochs - idx - (epoch-1)*iter_per_epochs))
+                remaining = Dates.canonicalize(Dates.Nanosecond(round(remaining)))
+                println("Epoch : $(epoch_sofar + epoch-1 + idx/iter_per_epochs) of $(epochs)")
+                println("\tReconstruction error : $(recon_err)")
+                println("\tElapsed time : $(Dates.canonicalize(timesince)) \t$(percent*100)%\t ETA $(remaining)")
+            end
+        end
+
+        # save to file
+        if args.save
+            append!(recon_errs, recon_err)
+            if recon_err < best
+                best = recon_err
+                save_dic = (args=args, synapses = Flux.state(synapses), opt = Flux.state.(layeroptimizers),
+                                  recon_err=recon_err, best = best,
+                                  epoch = epoch_sofar + epoch)
+                jldsave(path * "/checkpoint.jld2", model_state=save_dic)
+            end
+        end
+
+    end
+
+    # save final model
+    if save
+        save_dic = (args=args, synapses = Flux.state(synapses), opt = Flux.state.(layeroptimizers),
+                          recon_err=recon_err, best = best,
+                          epoch = epoch_sofar + epoch)
+        jldsave(path * "/final.jld2", model_state=save_dic)
+    end
 end
 end
