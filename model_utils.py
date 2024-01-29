@@ -17,6 +17,10 @@ from data_utils import *
 from EP_attacks.art_PGD_EP import ProjectedGradientDescentPyTorch
 from EP_attacks.pytorch import PyTorchClassifier
 
+from art.estimators.classification import BlackBoxClassifierNeuralNetwork
+#from art.attacks.evasion.square_attack import SquareAttack
+from EP_attacks.square_attack import SquareAttack
+
 from itertools import repeat
 from torch.nn.parameter import Parameter
 import collections
@@ -570,8 +574,74 @@ class P_CNN(torch.nn.Module):
         delta_phi.backward() # p.grad = -(d_Phi_2/dp - d_Phi_1/dp)/(beta_2 - beta_1) ----> dL/dp  by the theorem
  
            
-   
+class P_CNN_nobias(P_CNN): # control group, why is LCAnet so much more robust?
+    def postupdate(self):
+        self.sparse_layer_idxs = [0]
+        with torch.no_grad():
+            for j in self.sparse_layer_idxs:
+                # normalize columns
+                if isinstance(self.synapses[j], torch.nn.Conv2d):
+                    #self.synapses[j].weight.div_(self.synapses[j].weight.norm(2, dim=(0,2,3))[None,:,None,None] + 1e-6)
+                    self.synapses[j].weight.div_(self.synapses[j].weight.norm(2, dim=(1,2,3))[:,None,None,None] + 1e-6)
+                elif isinstance(self.synapses[j], torch.nn.Linear):
+                    self.synapses[j].weight.div_(self.synapses[j].weight.norm(2, dim=1)[:,None] + 1e-6)
+                self.synapses[j].bias.zero_()
 
+    def forward(self, x, y, neurons, T, beta=0.0, check_thm=False, criterion=torch.nn.MSELoss(reduction='none')):
+        not_mse = (criterion.__class__.__name__.find('MSE')==-1)
+        mbs = x.size(0)
+        device = x.device     
+
+        dt = 0.1
+        
+        membpot = torch.zeros_like(neurons[0])
+        if check_thm:
+            for t in range(T):
+                phi = self.Phi(x, y, neurons, beta, criterion)
+                init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
+                grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=True)
+
+                membpot = (1-0.01)*membpot.detach() + 0.01*grads[0]
+                neurons[0] = self.activation( membpot )
+                #neurons[0] = self.activation((1-0.01)*neurons[0].detach() + 0.01*grads[0])
+                #neurons[0] = self.activation((1-0.0)*neurons[0].detach() + 0.01*grads[0])
+                neurons[0].retain_grad()
+                for idx in range(1, len(neurons)-1):
+                    neurons[idx] = self.activation( grads[idx] )
+                    neurons[idx].retain_grad()
+             
+                if not_mse and not(self.softmax):
+                    neurons[-1] = grads[-1]
+                else:
+                    neurons[-1] = self.activation( grads[-1] )
+
+                neurons[-1].retain_grad()
+        else:
+             for t in range(T):
+                phi = self.Phi(x, y, neurons, beta, criterion)
+                init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
+                grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=False)
+
+                membpot = (1-dt)*membpot.detach() + dt*grads[0]
+                neurons[0] = self.activation( membpot )
+                #membpot = self.activation( membpot )
+                #neurons[0] = self.activation((1-0.01)*neurons[0].detach() + 0.01*grads[0])
+                neurons[0].requires_grad = True
+                for idx in range(1, len(neurons)-1):
+                    neurons[idx] = self.activation( grads[idx] )
+                    neurons[idx].requires_grad = True
+             
+                
+                if not_mse and not(self.softmax):
+                    neurons[-1] = grads[-1]
+                    #neurons[-1] = self.activation(grads[-1]) + 1e-2
+                else:
+                    neurons[-1] = self.activation( grads[-1] )
+
+                neurons[-1].requires_grad = True
+
+        return neurons
+       
 
 # CNN with analytically computed energy model rule (equation of motion rather than computing grad of Phi computationaly)
 class CNN_Analytical(P_CNN):
@@ -1133,63 +1203,50 @@ def showattacks(attackx, x, attackpreds, origpreds, savefig=False, path='/tmp/at
 
 
 class energyModelWrapper(torch.nn.Module):
-    def __init__(self, model):
+    def __init__(self, model, breif_differentiable=True):
         super(energyModelWrapper, self).__init__()
         self.model = model
-    def setup(self, y, beta, T, criterion):
+        self.breif_diff = breif_differentiable
+    def setup(self, y, beta, T, criterion, mbs, device):
         self.y = y
+        self.mbs = mbs
+        self.device = device
         self.beta = beta
         self.T = T
+        if self.breif_diff:
+            self.differentiable = (self.T < 30)
+        else:
+            self.differentiable = False
         self.criterion = criterion
     def forward(self, x):
-        #xnograd = x.detach()
-        #x.retain_grad()
-        #self.neurons.retain_graph()
-        #self.neurons = self.model.forward(xnograd, self.y, self.neurons, beta=self.beta,
-        #                                  T=5, check_thm=False)
-        #self.neurons = self.model.forward(x, self.y, self.neurons, beta=self.beta,
-        #                                  T=2, check_thm=True)
-        mbs = x.size(0)
-        device = x.device
+        if type(x) == torch.Tensor:
+            mbs = x.size(0)
+            device = x.device
+            post = lambda x: x
+        elif type(x) == np.ndarray:
+            mbs = x.shape[0]
+            x = torch.from_numpy(x).to(self.device)
+            device = self.device
+            post = lambda x: x.detach().cpu().numpy()
         self.neurons = self.model.init_neurons(mbs, device)
       #  not_mse = self.criterion.__class__.__name__.find('MSE')==-1
 
-        self.neurons = self.model.forward(x, self.y, self.neurons, self.T, self.beta, criterion=self.criterion, check_thm=(self.T < 30))
+        if mbs > 1:
+            self.neurons = self.model.forward(x, self.y, self.neurons, self.T, self.beta, criterion=self.criterion, check_thm=self.differentiable)
 
-      #  neurons = self.neurons
-      #  for t in range(self.T):
-      #      phi = self.model.Phi(x, self.y, self.neurons, self.beta, self.criterion)
-      #      init_grads = torch.tensor([1 for i in range(mbs)], dtype=torch.float, device=device, requires_grad=True)
-      #      if self.T < 30:
-      #          grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=True, retain_graph=True)
-      #      else:
-      #          grads = torch.autograd.grad(phi, neurons, grad_outputs=init_grads, create_graph=False)
-
-      #      for idx in range(len(neurons)-1):
-      #          neurons[idx] = self.model.activation( grads[idx] )
-      #          if self.T > 29:
-      #              neurons[idx].requires_grad = True
-
-      #      if not_mse and not(self.model.softmax):
-      #          neurons[-1] = grads[-1]
-      #      else:
-      #          neurons[-1] = self.model.activation( grads[-1] )
-
-      #      if self.T > 29:
-      #          neurons[-1].requires_grad = True
-      #  self.model.zero_grad()
         if not self.model.softmax:
-            return self.neurons[-1]
+            return post(self.neurons[-1])#.detach().cpu().numpy()
         else:
-            return F.softmax(self.model.synapses[-1](self.neurons[-1].view(mbs,-1)), dim=1)
+            return post(F.softmax(self.model.synapses[-1](self.neurons[-1].view(mbs,-1)), dim=1))#.detach().cpu().numpy()
     def zero_grad(self):
         super(energyModelWrapper, self).zero_grad()
         self.model.zero_grad()
 
-def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion, device, path, norm=2, save_adv_examples=False, figs=False, deltapert=False):
+    
+def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion, device, path, norm=2, save_adv_examples=False, figs=False, deltapert=False, box='whitebox'):
     criterion.reduction='sum'
     mbs = loader.batch_size
-    forwardmodel = energyModelWrapper(model)
+    forwardmodel = energyModelWrapper(model, breif_differentiable=(box=='whitebox'))
 
     #if hasattr(model, 'sparselayeridxs'): # lca models have specialized forward methods
     #    forwardmodel.forward = lambda x: model.forward(x, forwardmodel.y, forwardmodel.neurons, forwardmodel.T, forwardmodel.beta, check_thm=(forwardmodel.T < 30), criterion=forwardmodel.criterion)
@@ -1203,8 +1260,14 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
 
     mean = np.array([0.4914, 0.4822, 0.4465])[None,:,None,None]
     std = np.array([3*0.2023, 3*0.1994, 3*0.2010])[None,:,None,None]
-    art_model = PyTorchClassifier(forwardmodel, loss=criterion, nb_classes=model.nc, input_shape=(mbs,model.channels[0], model.in_size, model.in_size), preprocessing=(mean,std))
-    art_PGD = ProjectedGradientDescentPyTorch(art_model, norm, eps, 2.5*eps/20, max_iter=20, batch_size=mbs, verbose=False)
+    if box == 'whitebox':
+        pred_model = PyTorchClassifier(forwardmodel, loss=criterion, nb_classes=model.nc, input_shape=(mbs,model.channels[0], model.in_size, model.in_size), preprocessing=(mean,std))
+        attacker = ProjectedGradientDescentPyTorch(pred_model, norm, eps, 2.5*eps/20, max_iter=20, batch_size=mbs, verbose=False)
+        print('attack: white box PGD, norm {}'.format(norm))
+    elif box == 'blackbox':
+        pred_model = BlackBoxClassifierNeuralNetwork(forwardmodel, input_shape=(model.channels[0], model.in_size, model.in_size), nb_classes=10,clip_values=(0,1),preprocessing=(mean,std))
+        attacker = SquareAttack(pred_model, norm = norm, nb_restarts=3, eps = eps,max_iter=100, batch_size=mbs, verbose=False)
+        print('attack: black box square attack, norm {}'.format(norm))
     originals = []
     adv_examples = []
     preds = []
@@ -1216,26 +1279,35 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
         if idx >= nbatches:
             break
         # do original, unhampered prediction for control group
-        forwardmodel.setup(y, beta, predict_steps, criterion)
-        pred = np.argmax(art_model.predict(x.cpu().numpy()), axis=1)
+        forwardmodel.setup(y, beta, predict_steps, criterion, mbs, device)
+        pred = np.argmax(pred_model.predict(x), axis=1) # .cpu().numpy()
         correct = (torch.from_numpy(pred) == y).sum().item()
         tot_correct += correct
+
+        #forwardmodel.model.init_neurons(x.size(0), x.device)
+        #forwardmodel.neurons = forwardmodel.model.forward(x, forwardmodel.y, forwardmodel.neurons, attack_steps-predict_steps, forwardmodel.beta, criterion=forwardmodel.criterion, check_thm=False)
+        #pred2 =  np.argmax(forwardmodel.neurons[-1].detach().cpu().numpy(), axis=1)
+        #correct = (torch.from_numpy(pred) == y).sum().item()
+        #print('n correct', correct)
 
         if deltapert:
             # simulate for T2-T1, so the original prediction has as many steps as the adversarial run
             forwardmodel.neurons = forwardmodel.model.forward(x, forwardmodel.y, forwardmodel.neurons, attack_steps-predict_steps, forwardmodel.beta, criterion=forwardmodel.criterion, check_thm=False)
             
-            print('orig L2', [n.norm(2) for n in forwardmodel.neurons])
+            print('orig L2', [n.norm(2).item() for n in forwardmodel.neurons])
             neurons_orig = copy(forwardmodel.neurons)
 
         # design adversarial example and predict with that
-        forwardmodel.setup(y, beta, attack_steps, criterion)
-        x_adv = (art_PGD.generate(x.cpu().numpy())) # np.vectorize(loader.dataset.transform)
-        x_adv.clip(-2, 2) # clip large values (ensures large enough attacks start saturating values)
-        forwardmodel.setup(y, beta, predict_steps, criterion)
-        pred_adv = np.argmax(art_model.predict(x_adv), axis=1)
+        forwardmodel.setup(y, beta, attack_steps, criterion, mbs, device)
+        x_adv = (attacker.generate(x.cpu().numpy())) # np.vectorize(loader.dataset.transform)
+        if box == "whitebox":
+            x_adv.clip(-2, 2) # clip large values (ensures large enough attacks start saturating values)
+        forwardmodel.setup(y, beta, predict_steps, criterion, mbs, device)
+        pred_adv = np.argmax(pred_model.predict(x_adv), axis=1)
         correct_adv = (torch.from_numpy(pred_adv) == y).sum().item()        
         tot_correct_adv += correct_adv
+
+        print('L2 (x_adv - x) = ', np.sqrt(np.mean(np.sum((x.detach().cpu().numpy() - x_adv)**2, axis=(1,2,3)))))
 
         adv_success = torch.logical_and((torch.from_numpy(pred) == y), (torch.from_numpy(pred_adv) != y))
         originals.append(x.cpu().numpy()[adv_success])
@@ -1245,11 +1317,12 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
         preds.append(pred_name[adv_success])
         preds_adv.append(pred_adv_name[adv_success])
 
+        print(x_adv.shape[0], 'examples generated', x_adv.shape[0]-correct_adv, 'fool classifier')
         print('Batch {} of {} : original accuracy={}, adversarial accuracy={}, attack success rate={}'.format(idx, nbatches, correct/y.size(0), correct_adv/y.size(0), adv_success.sum()/y.size(0)))
 
         if deltapert:
             neurons_adv = copy(forwardmodel.neurons)
-            print('adv  L2', [n.norm(2) for n in neurons_adv])
+            print('adv  L2', [n.norm(2).item() for n in neurons_adv])
 
             for li in range(len(neurons_orig)):
                 delta_right[li] += ( (neurons_adv[li] - neurons_orig[li])[np.logical_not(adv_success)].norm(2, dim=list(range(1,neurons_orig[li].dim())))/neurons_orig[li][np.logical_not(adv_success)].norm(2,dim=list(range(1,neurons_orig[li].dim()))) ).mean(dim=0) / nbatches
@@ -1268,6 +1341,8 @@ def attack(model, loader, nbatches, attack_steps, predict_steps, eps, criterion,
         np.save(savepath + '__attacked_pred.npy', np.asarray(preds_adv))
 #    if deltapert:
 #        np.save(savepath + '__delta_pertubation_layers.npy', np.asarray([delta_right, delta_wrong]))
+    
+    print('accuracies', tot_correct/nbatches/mbs, tot_correct_adv/nbatches/mbs)
 
     return tot_correct/nbatches/mbs, tot_correct_adv/nbatches/mbs, adv_examples, preds, preds_adv, delta_right, delta_wrong
 
@@ -1814,6 +1889,9 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                       '\tRun train acc :', round(run_acc,3),'\t('+str(run_correct)+'/'+str(run_total)+')\t',
                       timeSince(start, ((idx+1)+epoch*iter_per_epochs)/(epochs*iter_per_epochs)))
                 if alg == 'EP' or alg == 'CEP' or alg=="LCAEP":
+                    print('first hidden layer | L1 neurons, L0 neurons, size', neurons_1[0].norm(1).item(), neurons_1[0].norm(0).item(), neurons_1[0].size())
+                    if hasattr(model, 'membpotes'):
+                        print('first hidden layer | L1 membpotes, L0 membpotes, size', model.membpotes[0].norm(1).item(), model.membpotes[0].norm(0).item(), model.membpotes[0].size())
                     print('\tL2 neurons_1-neurons_2 : ', [(neurons_1[idx]-neurons_2[idx]).norm(2).item() for idx in range(len(neurons_1))])
                     if thirdphase:
                         print('\tL2 neurons_1-neurons_3 : ', [(neurons_1[idx]-neurons_3[idx]).norm(2).item() for idx in range(len(neurons_1))])
@@ -1862,13 +1940,20 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                     # plot how much the neurons are changing to know when it equilibrates
                     neurons = model.init_neurons(mbs, device)
                     l2s = [[] for i in range(len(neurons))]
+                    cycle_l2s = [[] for i in range(len(neurons))]
                     phis = []
                     for t in range(T1):
                         lastneurons = copy(neurons)
                         neurons = model(x, y, neurons, 1, beta=beta_1, criterion=criterion)
-                        [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
+                        [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(neurons))]
                         if not isreconstructmodel:
                             phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
+                        
+                        # detect limit cycles by taking the diffeence of each new step with a fixed-time old state
+                        if t == T1//2:
+                            fixed_neurons = copy(neurons)
+                        elif t > T1//2:
+                            [cycle_l2s[layeridx].append((neurons[layeridx]-fixed_neurons[layeridx]).norm(2).item()) for layeridx in range(len(neurons))]
                     if reconstruct:
                         with torch.no_grad():
                             #neurons_1[0].zero_()
@@ -1888,6 +1973,9 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                         [l2s[layeridx].append((neurons[layeridx]-lastneurons[layeridx]).norm(2).item()) for layeridx in range(len(l2s))]
                         if not isreconstructmodel:
                             phis.append(model.Phi(x, y, neurons, beta=beta_1, criterion=criterion).sum().item())
+
+                        # detect limit cycles by taking the diffeence of each new step with a fixed-time old state
+                        [cycle_l2s[layeridx].append((neurons[layeridx]-fixed_neurons[layeridx]).norm(2).item()) for layeridx in range(len(neurons))]
                     plot_neural_activity(neurons, path, suff=str(epoch_sofar+epoch)+'_nudged')
                     N = len(neurons)
                     fig = plt.figure(figsize=(3*N,6))
@@ -1896,15 +1984,19 @@ def train(model, optimizer, train_loader, test_loader, T1, T2, betas, device, ep
                         if reconstruct:
                             plt.plot(range(T1+floatdur+T2), l2s[layeridx])
                         else:
-                            plt.plot(range(T1+T2), l2s[layeridx])
+                            plt.plot(range(T1+T2), l2s[layeridx], label="L2 of neurons_T - neurons_T+1")
+                        plt.plot(range(T1//2+1, T1+T2), cycle_l2s[layeridx], label="L2 from T={}".format(T1//2))
                         plt.title('L2 change in neurons of layer '+str(layeridx+1))
                         plt.xlabel('time step')
                         plt.yscale('log')
                         plt.axvline(x=T1, linestyle=':')
+                        plt.legend()
                         plt.tight_layout()
                     fig.savefig(path + '/neural_equilibrating_{}.png'.format(epoch_sofar+epoch), bbox_inches='tight')
                     plt.close()
 
+                    
+    
                     if not isreconstructmodel:
                         fig = plt.figure()
                         plt.plot(range(T1+T2), phis)

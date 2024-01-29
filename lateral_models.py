@@ -895,22 +895,30 @@ class autoLCACNN(P_CNN):
                 if idx in self.sparse_layer_idxs:
                     if idx < len(neurons)-1: # don't apply L2 decay on membrane potential if there isn't a layer above
                         #self.membpotes[idx].mul_(1-self.dt)
-                        self.membpotes[idx] = (1-self.dt)*self.membpotes[idx] + self.dt*grads[idx]
+                        self.membpotes[idx] = (1-self.dt)*self.membpotes[idx].detach() + self.dt*grads[idx] + self.dt*neurons[idx].detach()
                     else:
-                        self.membpotes[idx] = self.membpotes[idx] + self.dt*grads[idx]
-                    if self.membpotes[idx].is_leaf:
-                        self.membpotes[idx].requires_grad = True
+                        self.membpotes[idx] = self.membpotes[idx].detach() + self.dt*grads[idx]
+                    #if self.membpotes[idx].is_leaf:
+                    #    self.membpotes[idx].requires_grad = True
+
                     #self.membpotes[idx].add_(self.dt*(grads[idx]))#- neurons[0])#
                     #if self.membpotes[idx].grad is not None:
                     #    self.membpotes[idx].add_(self.dt*self.membpotes[idx].grad)
                     neurons[idx] = F.relu(self.membpotes[idx] - self.layerlambdas[idx])
+                    #neurons[idx] = F.relu(neurons[idx].detach() + grads[idx] - self.layerlambdas[idx])
+                    
+                    # check removing effect of membrane potentials
+                    #self.membpotes[idx] = F.relu(self.membpotes[idx])
                 else:
                     # remaining layers do classic hopfield dynamics
                     #neurons[idx].mul_(1-auxdt)
                     #neurons[idx].add_(auxdt*grads[idx])
-                    neurons[idx] = self.activation( (1-auxdt)*neurons[idx] + auxdt*grads[idx] )
-                if neurons[idx].is_leaf:
+                    neurons[idx] = self.activation( (1-auxdt)*neurons[idx].detach() + auxdt*grads[idx] )
+                #if neurons[idx].is_leaf:
+                if not check_thm:
                     neurons[idx].requires_grad = True
+                else:
+                    neurons[idx].retain_grad()
 
             #maxdt = 2*self.origdt
             #if self.dt < maxdt:

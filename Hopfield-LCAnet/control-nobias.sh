@@ -1,7 +1,7 @@
 #!/bin/sh
 python ../main.py \
-    --model 'autoLCACNN' \
-    --alg 'LCAEP' \
+    --model 'CNNnobias' \
+    --alg 'EP' \
     --thirdphase \
     --task 'CIFAR10' \
     --channels 64 128 256 256 \
@@ -13,7 +13,6 @@ python ../main.py \
     --strides 1 1 1 1 \
     --paddings 3 1 1 0 \
     --sparse-layers 0 \
-    --lambdas 0.05 \
     --fc 10 \
     --optim 'sgd' \
     --mmt 0.9 \
@@ -27,9 +26,8 @@ python ../main.py \
     --save  \
     --device $2 \
     --seed $1 \
-    --epochs 20 \
+    --epochs 1 \
     --tensorboard \
     --dt 0.01 \
     --load-path-convert results/EP/mse/2023-09-29/12-07-08_gpu0 \
     --keep-checkpoints 1 \
-    --anneal-competition \

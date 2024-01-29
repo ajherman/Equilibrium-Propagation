@@ -81,7 +81,7 @@ parser.add_argument('--convert-place-layers', nargs='+', type = str, default = [
 
 parser.add_argument('--tensorboard', default = False, action = 'store_true', help='write data to tensorboard for viewing while training')
 
-parser.add_argument('--lambdas', nargs='+', type = float, default=[], help='(sparse-)layer-wise fixed value for negative bias. Equivelant to L1 penalty on neurons scaled by this.')
+parser.add_argument('--lambdas', nargs='+', type = float, default=[], help='(sparse-)layer-wise fixed value for threshold of ReLu activation function.') # Equivelant to L1 penalty on neurons scaled by this.') ? 
 parser.add_argument('--nudge-lambda', nargs='+', type = float, default=[], help='impose L1 penalty in nudged phase with this coefficient, to train for sparsity with EP')
 
 parser.add_argument('--eps', nargs='+', type = float, default = [], metavar = 'e', help='epsilon values to use for PGD attack (--todo attack)')
@@ -98,7 +98,7 @@ parser.add_argument('--dt', type=float, default = 1.0,  help='timestep for model
 
 parser.add_argument('--anneal-competition', default = False, action = 'store_true', help='whether to enable the lateral/hopfield interactions gradually (turning up coefficient by 0.1 per epoch for the first 10 epochs (default: False)')
 
-parser.add_argument('--pgdnorm',type = int, default = 2, help='L norm to use for PGD attack (if --todo attack), default = 2, values > 1e5 are set to L-infinity')
+parser.add_argument('--norm',type = int, default = 2, help='L norm to use for PGD attack (if --todo attack), default = 2, values > 1e5 are set to L-infinity')
 
 parser.add_argument('--keep-checkpoints', type=int, default=0, help='interval to save seperate checkpoint files for (e.g. setting to 5 means every 5 epochs a new checkpoint file is created)')
 
@@ -173,7 +173,7 @@ if __name__ == '__main__':
         if args.noise > 0.0:
             transform_train = torchvision.transforms.Compose([transform_train, AddGaussianNoise(0.0, args.noise)])
 
-        if args.todo=='attack':
+        if args.todo=='attack' or args.todo=='attack_blackbox':
             transform_test = torchvision.transforms.Compose([torchvision.transforms.ToTensor()])
         else:
             transform_test = torchvision.transforms.Compose([torchvision.transforms.ToTensor(), 
@@ -260,6 +260,9 @@ if __name__ == '__main__':
             if args.model=='autoLCACNN':
                 model = autoLCACNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
                                   activation=activation, softmax=args.softmax, dt=args.dt, sparse_layer_idxs=args.sparse_layers, lambdas=args.lambdas, inhibitstrength=inhibitstrength)
+            if args.model=='CNNnobias':
+                model = P_CNN_nobias(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings, 
+                                  activation=activation, softmax=args.softmax)
             elif args.model=='VFCNN':
                 model = VF_CNN(in_size, channels, args.kernels, args.strides, args.fc, pools, args.paddings,
                                    activation=activation, softmax=args.softmax, same_update=args.same_update)
@@ -517,12 +520,17 @@ if __name__ == '__main__':
                      thirdphase=args.thirdphase, scheduler=scheduler, cep_debug=args.cep_debug, tensorboard=args.tensorboard, annealcompetition=True, keep_checkpoints=args.keep_checkpoints)
 
 
-    elif args.todo=='attack':
-        print('Performing PGD attacks on model')
-        pgdnorm = args.pgdnorm
-        if pgdnorm > 1e5:
-            pgdnorm = np.inf
-        savepath = path+'/PGD_attack/L_{}/'.format(pgdnorm)
+    elif args.todo=='attack' or args.todo=='attack_blackbox':
+        print('Performing attacks on model')
+        print('delta pertubation?', args.deltapertubation)
+        attacknorm = args.norm
+        if attacknorm > 1e5:
+            attacknorm = np.inf
+        if args.todo =='attack':
+            savepath = path+'/PGD_attack/'
+        if args.todo == 'attack_blackbox':
+            savepath = path+'/blackbox_square_attack/'
+        savepath = savepath + '/L_{}/predict-steps_{}'.format(attacknorm, args.T2)
         os.makedirs(savepath, exist_ok=True)
         accs = []
         accs_adv = []
@@ -530,11 +538,12 @@ if __name__ == '__main__':
         delta_wrongs = []
         for eps in args.eps:
             print('Now attacking with epsilon : ', eps)
-            print('deltapert', args.deltapertubation)
-            acc, acc_adv, examples, preds, preds_adv, delta_right, delta_wrong = attack(model, test_loader, args.nbatches, args.T1, args.T2, eps, criterion, device, savepath, norm=pgdnorm, save_adv_examples=args.save, figs=args.figs, deltapert = args.deltapertubation)
+            if args.todo=='attack':
+                acc, acc_adv, examples, preds, preds_adv, delta_right, delta_wrong = attack(model, test_loader, args.nbatches, args.T1, args.T2, eps, criterion, device, savepath, norm=attacknorm, save_adv_examples=args.save, figs=args.figs, deltapert = args.deltapertubation, box='whitebox')
+            if args.todo=='attack_blackbox':
+                acc, acc_adv, examples, preds, preds_adv, delta_right, delta_wrong = attack(model, test_loader, args.nbatches, args.T1, args.T2, eps, criterion, device, savepath, norm=attacknorm, save_adv_examples=args.save, figs=args.figs, deltapert = args.deltapertubation, box='blackbox')
             delta_rights.append(delta_right)
             delta_wrongs.append(delta_wrong)
-            print(delta_right, delta_wrong)
             accs.append(acc)
             accs_adv.append(acc_adv)
         if args.save:

@@ -1,7 +1,7 @@
 #!/bin/sh
 python ../main.py \
-    --model 'autoLCACNN' \
-    --alg 'LCAEP' \
+    --model 'CNN' \
+    --alg 'EP' \
     --thirdphase \
     --task 'CIFAR10' \
     --channels 64 128 256 256 \
@@ -29,7 +29,5 @@ python ../main.py \
     --seed $1 \
     --epochs 20 \
     --tensorboard \
-    --dt 0.01 \
     --load-path-convert results/EP/mse/2023-09-29/12-07-08_gpu0 \
     --keep-checkpoints 1 \
-    --anneal-competition \

@@ -1,0 +1,81 @@
+
+
+../main.py --model autoLCACNN --alg LCAEP --thirdphase --task CIFAR10 --channels 64 128 256 256 --kernels 6 3 3 3 --lrs 2.5e-2 1.5e-2 1.0e-2 8.0e-3 5.0e-3 --lr-decay --wds 3e-4 3e-4 3e-4 3e-4 3e-4 3e-4 --pools mmmm --strides 1 1 1 1 --paddings 3 1 1 0 --sparse-layers 0 --lambdas 0.05 --fc 10 --optim sgd --mmt 0.9 --act my_hard_sig --todo train --betas 0.0 0.5 --T1 600 --T2 50 --mbs 128 --data-aug --save --device 1 --seed 251765 --epochs 20 --tensorboard --dt 0.01 --load-path-convert results/EP/mse/2023-09-29/12-07-08_gpu0 --keep-checkpoints 1 --anneal-competition
+
+
+##################################################################
+
+args	mbs	T1	T2	epochs	activation	betas
+	 128 	 600 	 50 	 20 	 my_hard_sig 	 [0.0, 0.5]
+
+
+---------- saving at results/LCAEP/mse/2024-01-29/08-30-07_gpu1 --------------
+Default dtype :	 torch.float32 
+
+Files already downloaded and verified
+Files already downloaded and verified
+loss = MSELoss() 
+
+
+
+Poolings = [MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False), MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False), MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False), MaxPool2d(kernel_size=2, stride=2, padding=0, dilation=1, ceil_mode=False)]
+autoLCACNN(
+  (synapses): ModuleList(
+    (0): Conv2d(3, 64, kernel_size=(6, 6), stride=(1, 1), padding=(3, 3))
+    (1): Conv2d(64, 128, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (2): Conv2d(128, 256, kernel_size=(3, 3), stride=(1, 1), padding=(1, 1))
+    (3): Conv2d(256, 256, kernel_size=(3, 3), stride=(1, 1))
+    (4): Linear(in_features=256, out_features=10, bias=True)
+  )
+)
+trian lat? False False
+SGD (
+Parameter Group 0
+    dampening: 0
+    initial_lr: 0.025
+    lr: 0.025
+    momentum: 0.9
+    nesterov: False
+    weight_decay: 0.0003
+
+Parameter Group 1
+    dampening: 0
+    initial_lr: 0.015
+    lr: 0.015
+    momentum: 0.9
+    nesterov: False
+    weight_decay: 0.0003
+
+Parameter Group 2
+    dampening: 0
+    initial_lr: 0.01
+    lr: 0.01
+    momentum: 0.9
+    nesterov: False
+    weight_decay: 0.0003
+
+Parameter Group 3
+    dampening: 0
+    initial_lr: 0.008
+    lr: 0.008
+    momentum: 0.9
+    nesterov: False
+    weight_decay: 0.0003
+
+Parameter Group 4
+    dampening: 0
+    initial_lr: 0.005
+    lr: 0.005
+    momentum: 0.9
+    nesterov: False
+    weight_decay: 0.0003
+)
+
+training algorithm :  LCAEP 
+
+competition annealer: inhibition strength coeff. now =  0.0
+synapse L2 norms [7.999989032745361, 5.95064640045166, 8.531073570251465, 8.779428482055664, 3.45267653465271]
+bias L1 norms [0.0, 9.252752304077148, 8.414716720581055, 8.114506721496582, 2.5852606296539307]
+final forward fc bias Parameter containing:
+tensor([0.3610, 0.1373, 0.2353, 0.4637, 0.3830, 0.1848, 0.2425, 0.1494, 0.2421,
+        0.1862], requires_grad=True)
